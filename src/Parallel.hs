@@ -321,11 +321,8 @@ runParallelCommands cmds0@(ParallelCommands forks0) = do
           return env'
 -- end snippet runParallelCommands
 
-getSeed :: PropertyM IO QCGen
-getSeed = do
-  ref <- liftIO (newIORef undefined)
-  MkPropertyM (\f -> let MkGen m = f () in MkGen (\r n -> writeIORef ref r >> m r n))
-  liftIO (readIORef ref)
+getSeed :: PropertyM m QCGen
+getSeed = MkPropertyM $ \f -> MkGen $ \r n -> unGen (f r) r n
 
 runParallelCommands' :: forall state. ParallelModel state
                      => ParallelCommands state -> PropertyM IO ()
