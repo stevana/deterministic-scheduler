@@ -1,44 +1,62 @@
-cabal-version:      3.0
-name:               deterministic-scheduler
-version:            0.0.0
+cabal-version:   3.0
+name:            deterministic-scheduler
+version:         0.0.0
+
 -- synopsis:
 -- description:
-license:            BSD-2-Clause
-license-file:       LICENSE
-author:             Stevan A
-maintainer:         stevana@users.noreply.github.com
+license:         BSD-2-Clause
+license-file:    LICENSE
+author:          Stevan A
+maintainer:      stevana@users.noreply.github.com
+
 -- copyright:
-category:           Concurrency
-build-type:         Simple
-extra-doc-files:    CHANGELOG.md
+category:        Concurrency
+build-type:      Simple
+extra-doc-files: CHANGELOG.md
+
 -- extra-source-files:
 
 common warnings
-    ghc-options: -Wall
+  ghc-options: -Wall
 
 library
-    import:           warnings
-    exposed-modules:  ManagedThread, ManagedThread2
-    build-depends:    base ^>=4.17.0.0, random, stm, async
-    hs-source-dirs:   src
-    default-language: Haskell2010
+  import:           warnings
+  exposed-modules:
+    Example.Counter
+    ManagedThread
+    ManagedThread2
+    Parallel
+    Stateful
+
+  build-depends:
+    , async
+    , base        ^>=4.20.0.0
+    , containers
+    , exceptions
+    , mtl
+    , QuickCheck
+    , random
+    , stm
+
+  hs-source-dirs:   src
+  default-language: Haskell2010
 
 executable exe
-    import:           warnings
-    main-is:          Main.hs
-    build-depends:
-        base,
-        deterministic-scheduler
+  import:           warnings
+  main-is:          Main.hs
+  build-depends:
+    , base
+    , deterministic-scheduler
 
-    hs-source-dirs:   app
-    default-language: Haskell2010
+  hs-source-dirs:   app
+  default-language: Haskell2010
 
 test-suite test
-    import:           warnings
-    default-language: Haskell2010
-    type:             exitcode-stdio-1.0
-    hs-source-dirs:   test
-    main-is:          Main.hs
-    build-depends:
-        base,
-        deterministic-scheduler
+  import:           warnings
+  default-language: Haskell2010
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Main.hs
+  build-depends:
+    , base
+    , deterministic-scheduler
