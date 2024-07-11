@@ -11,8 +11,10 @@ import System.Timeout
 
 ------------------------------------------------------------------------
 
+-- start snippet Signal
 data Signal = SingleThreaded | MultiThreaded (TMVar ())
   deriving Eq
+-- end snippet
 
 newSingleThreadedSignal :: Signal
 newSingleThreadedSignal = SingleThreaded
@@ -99,7 +101,8 @@ schedule mtids0 gen0 = do
 
 mapConcurrently :: RandomGen g => (Signal -> a -> IO b) -> [a] -> g -> IO ([b], g)
 mapConcurrently f xs gen = do
-  mtids <- forM xs $ \x -> spawn "" (\sig -> f sig x)
+  mtids <- forM (zip [0..] xs) $ \(i, x) ->
+    spawn ("Thread " ++ show i) (\sig -> f sig x)
   schedule mtids gen
 
 ------------------------------------------------------------------------
