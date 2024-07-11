@@ -6,8 +6,6 @@
 
 module Example.Counter where
 
-import Control.Concurrent (threadDelay)
-import Control.Monad
 import Control.Monad.Reader
 import Data.IORef
 import Data.Void
@@ -100,21 +98,20 @@ instance StateModel Counter where
   -- This example has no references.
   type Reference Counter = Void
 
+  runCommandMonad _ m sig = runReaderT m sig
+
 prop_counter :: Commands Counter -> Property
 prop_counter cmds = monadicIO $ do
-  run reset
-  undefined -- XXX: runCommands cmds
+  liftIO reset
+  runCommands cmds
   assert True
 
 -- start snippet parallel-counter
-instance ParallelModel Counter where
-
-  -- The command monad is IO, so we don't need to do anything here.
-  runCommandMonad' _ m sig = runReaderT m sig
+instance ParallelModel Counter
 
 prop_parallelCounter :: ParallelCommands Counter -> Property
 prop_parallelCounter cmds = monadicIO $ do
   run reset
-  runParallelCommands' cmds
+  runParallelCommands cmds
   assert True
 -- end snippet parallel-counter

@@ -11,7 +11,6 @@
 
 module Parallel where
 
-import Control.Concurrent.Async
 import Control.Concurrent.STM
 import Control.Exception (SomeException, displayException, try)
 import Control.Monad
@@ -49,15 +48,6 @@ class (StateModel state, Ord state) => ParallelModel state where
                         -> [Command state (Var (Reference state))]
   shrinkCommandParallel ss cmd = shrinkCommand (maximum ss) cmd
 -- end snippet ParallelModel
-
--- start snippet runCommandMonad
-  -- If another command monad is used we need to provide a way run it inside the
-  -- IO monad. This is only needed for parallel testing, because IO is the only
-  -- monad we can execute on different threads.
-  runCommandMonad :: proxy state -> CommandMonad state a -> IO a
--- end snippet runCommandMonad
---
-  runCommandMonad' :: proxy state -> CommandMonad state a -> Scheduler.Signal -> IO a
 
 -- start snippet ParallelCommands
 newtype ParallelCommands state = ParallelCommands [Fork state]
@@ -280,53 +270,13 @@ combineEnvs = Env . IntMap.unions . map unEnv
 
 ------------------------------------------------------------------------
 
+getSeed :: PropertyM m QCGen
+getSeed = MkPropertyM (\f -> MkGen (\r n -> unGen (f r) r n))
+
 -- start snippet runParallelCommands
 runParallelCommands :: forall state. ParallelModel state
                     => ParallelCommands state -> PropertyM IO ()
 runParallelCommands cmds0@(ParallelCommands forks0) = do
-  forM_ (parallelCommands cmds0) $ \cmd -> do
-    let name = commandName cmd
-    monitor (tabulate "Commands" [name] . classify True name)
-  monitor (tabulate "Concurrency" (map (show . length . unFork) forks0))
-  q   <- liftIO newTQueueIO
-  c   <- liftIO newAtomicCounter
-  env <- liftIO (runForks q c emptyEnv forks0)
-  hist <- History <$> liftIO (atomically (flushTQueue q))
-  let ok = linearisable env (interleavings hist)
-  unless ok (monitor (counterexample (show hist)))
-  assert ok
-  where
-    runForks :: TQueue (Event state) -> AtomicCounter -> Env state -> [Fork state]
-             -> IO (Env state)
-    runForks _q _c env [] = return env
-    runForks  q  c env (Fork cmds : forks) = do
-      envs <- liftIO $
-        mapConcurrently (runParallelReal q c env) (zip [Pid 0..] cmds)
-      let env' = combineEnvs (env : envs)
-      runForks q c env' forks
-
-    runParallelReal :: TQueue (Event state) -> AtomicCounter -> Env state
-                    -> (Pid, Command state (Var (Reference state))) -> IO (Env state)
-    runParallelReal q c env (pid, cmd) = do
-      atomically (writeTQueue q (Invoke pid cmd))
-      eResp <- try (runCommandMonad (Proxy :: Proxy state) (runReal (fmap (lookupEnv env) cmd)))
-      case eResp of
-        Left (err :: SomeException) ->
-          error ("runParallelReal: " ++ displayException err)
-        Right resp -> do
-          -- NOTE: It's important that we extend the environment before writing `Ok`
-          -- to the history, otherwise we might get scope issues.
-          env' <- extendEnvParallel env c (toList resp)
-          atomically (writeTQueue q (Ok pid resp))
-          return env'
--- end snippet runParallelCommands
-
-getSeed :: PropertyM m QCGen
-getSeed = MkPropertyM $ \f -> MkGen $ \r n -> unGen (f r) r n
-
-runParallelCommands' :: forall state. ParallelModel state
-                     => ParallelCommands state -> PropertyM IO ()
-runParallelCommands' cmds0@(ParallelCommands forks0) = do
   gen <- getSeed
   liftIO (putStrLn ("Seed: " ++ show gen))
   forM_ (parallelCommands cmds0) $ \cmd -> do
@@ -354,7 +304,7 @@ runParallelCommands' cmds0@(ParallelCommands forks0) = do
                     -> Scheduler.Signal -> (Pid, Command state (Var (Reference state))) -> IO (Env state)
     runParallelReal q c env signal (pid, cmd) = do
       atomically (writeTQueue q (Invoke pid cmd))
-      eResp <- try (runCommandMonad' (Proxy :: Proxy state) (runReal (fmap (lookupEnv env) cmd)) signal)
+      eResp <- try (runCommandMonad (Proxy :: Proxy state) (runReal (fmap (lookupEnv env) cmd)) signal)
       case eResp of
         Left (err :: SomeException) ->
           error ("runParallelReal: " ++ displayException err)
@@ -364,3 +314,4 @@ runParallelCommands' cmds0@(ParallelCommands forks0) = do
           env' <- extendEnvParallel env c (toList resp)
           atomically (writeTQueue q (Ok pid resp))
           return env'
+-- end snippet runParallelCommands

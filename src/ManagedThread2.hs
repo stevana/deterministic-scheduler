@@ -11,20 +11,27 @@ import System.Timeout
 
 ------------------------------------------------------------------------
 
-newtype Signal = Signal (TMVar ())
+data Signal = SingleThreaded | MultiThreaded (TMVar ())
   deriving Eq
 
-newSignal :: IO Signal
-newSignal = Signal <$> newEmptyTMVarIO
+newSingleThreadedSignal :: Signal
+newSingleThreadedSignal = SingleThreaded
+
+newMultiThreadedSignal :: IO Signal
+newMultiThreadedSignal = MultiThreaded <$> newEmptyTMVarIO
 
 pause :: Signal -> IO ()
-pause (Signal tmvar) = atomically (takeTMVar tmvar)
+pause SingleThreaded        = return ()
+pause (MultiThreaded tmvar) = atomically (takeTMVar tmvar)
 
 unpause :: Signal -> IO ()
-unpause (Signal tmvar) = atomically (putTMVar tmvar ())
+unpause SingleThreaded        = error
+  "unpause: a single thread should never be paused"
+unpause (MultiThreaded tmvar) = atomically (putTMVar tmvar ())
 
 isPaused :: Signal -> STM Bool
-isPaused (Signal tmvar) = isEmptyTMVar tmvar
+isPaused SingleThreaded        = return False
+isPaused (MultiThreaded tmvar) = isEmptyTMVar tmvar
 
 waitUntilAllPaused :: [Signal] -> IO ()
 waitUntilAllPaused signals = atomically $ do
@@ -42,7 +49,7 @@ data ManagedThreadId a = ManagedThreadId
 
 spawn :: String -> (Signal -> IO a) -> IO (ManagedThreadId a)
 spawn name io = do
-  s <- newSignal
+  s <- newMultiThreadedSignal
   a <- async (io s)
   return (ManagedThreadId name s a)
 

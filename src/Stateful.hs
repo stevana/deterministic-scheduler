@@ -2,9 +2,10 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StrictData #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
@@ -13,16 +14,20 @@ module Stateful where
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
+import Data.Coerce
+import Data.Foldable
 import Data.IntMap (IntMap)
 import qualified Data.IntMap as IntMap
-import Data.Foldable
 import Data.Kind
-import Data.Coerce
+import Data.Proxy
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Void
 import Test.QuickCheck hiding (Failure, Success)
+import Test.QuickCheck.Gen
 import Test.QuickCheck.Monadic
+
+import qualified ManagedThread2 as Scheduler
 
 ------------------------------------------------------------------------
 
@@ -95,6 +100,13 @@ class ( Monad (CommandMonad state)
   type CommandMonad state :: Type -> Type
   type CommandMonad state = IO
 -- end snippet StateModel
+
+-- start snippet runCommandMonad
+  -- If another command monad is used we need to provide a way run it inside the
+  -- IO monad. This is only needed for parallel testing, because IO is the only
+  -- monad we can execute on different threads.
+  runCommandMonad :: proxy state -> CommandMonad state a -> Scheduler.Signal -> IO a
+-- end snippet runCommandMonad
 
 ------------------------------------------------------------------------
 
@@ -219,10 +231,19 @@ scopeCheck varsInScope cmd = usedVars `Set.isSubsetOf` varsInScope
 -- Another option would be to introduce a new type class `ReturnsReferences` and
 -- ask the user to manually implement it.
 
+hoist :: Monad m => (forall x. m x -> IO x) -> PropertyM m a -> PropertyM IO a
+hoist nat (MkPropertyM f) = MkPropertyM $ \g ->
+  let
+    MkGen h = f (fmap (fmap (return . ioProperty)) g)
+  in
+    MkGen (\r n -> nat (h r n))
+
 -- start snippet runCommands
 runCommands :: forall state. StateModel state
-            => Commands state -> PropertyM (CommandMonad state) ()
-runCommands (Commands cmds0) = go initialState emptyEnv cmds0
+            => Commands state -> PropertyM IO ()
+runCommands (Commands cmds0) =
+  hoist (flip (runCommandMonad (Proxy :: Proxy state)) Scheduler.newSingleThreadedSignal) $
+    go initialState emptyEnv cmds0
   where
     go :: state -> Env state -> [Command state (Var (Reference state))]
        -> PropertyM (CommandMonad state) ()
