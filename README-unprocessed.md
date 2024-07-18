@@ -81,8 +81,31 @@ linearisability checking approach that we are about to describe[^3].
 In order to explain what we'd like to do, it's helpful to consider an example
 of a race condition.
 
-counter, two concurrent increments
-  https://en.m.wikipedia.org/wiki/Database_transaction_schedule
+The text book [example](https://en.wikipedia.org/wiki/Race_condition#Example)
+of a race condition is a counter which is incremented by two threads at the
+same time.
+
+| Time | Thread 1       | Thread 2       |   | Integer value |
+|:-----|:---------------|:---------------|:-:|:--------------|
+| 0    |                |                |   | 0             |
+| 1    | read value     |                | ← | 0             |
+| 2    | increase value |                |   | 0             |
+| 3    | write back     |                | → | 1             |
+| 4    |                | read value     | ← | 1             |
+| 5    |                | increase value |   | 1             |
+| 6    |                | write back     | → | 2             |
+
+
+| Time | Thread 1       | Thread 2       |   | Integer value |
+|:-----|:---------------|:---------------|:-:|:--------------|
+| 0    |                |                |   | 0             |
+| 1    | read value     |                | ← | 0             |
+| 2    |                | read value     | ← | 0             |
+| 3    | increase value |                |   | 0             |
+| 4    |                | increase value |   | 0             |
+| 5    | write back     |                | → | 1             |
+| 6    |                | write back     | → | 1             |
+
 
 different interleavings, we'd like to control which happens
 
@@ -175,4 +198,12 @@ scheduler isn't too much work.
 [^3]: Jepsen's [Knossos
     checker](https://aphyr.com/posts/314-computational-techniques-in-knossos)
     also uses linearisability checking and has found many
-    [bugs](https://jepsen.io/analyses), so we are in good company.
+    [bugs](https://jepsen.io/analyses), so we are in good company. 
+
+    Note that the most recent Jepsen analyses use the [Elle
+    checker](https://github.com/jepsen-io/elle), rather than the Knossos checker.
+    The Elle checker doesn't do linearisability checking, but rather looks for
+    cycles in the dependencies of database transactions. Checking for cycles is
+    less general than linearisability checking, but also more efficient. See the
+    Elle [paper](https://github.com/jepsen-io/elle/raw/master/paper/elle.pdf) for
+    details.
