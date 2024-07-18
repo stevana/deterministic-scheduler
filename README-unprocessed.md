@@ -49,20 +49,32 @@ process, but instead asks the scheduler to send it to the process. That way all
 messages go via the scheduler and it can choose the message order. Note that a
 seed can be used to introduce randomness, without introducing non-determinism.
 
-XXX:
-I implemented a scheduler like this for `distributed-process` in Haskell (think
-Haskell trying to be like Erlang) something like this 6 years ago:
-https://github.com/advancedtelematic/quickcheck-state-machine-distributed#readme
+I implemented a proxy scheduler like this in Haskell (using
+`distributed-process`, think Haskell trying to be like Erlang) about 6 years
+[ago](https://github.com/advancedtelematic/quickcheck-state-machine-distributed#readme),
+but I didn't know how to do it in a non-message-passing setting.
 
-but i didn't know how to do it in a non-actor setting.
-
-I was therefore happy to see that my post inspired matklad's
+I was therefore happy to see that my post inspired matklad to write a
 [post](https://matklad.github.io/2023/07/05/properly-testing-concurrent-data-structures.html)
+where he shows how he'd do it in a multi-threaded shared memory setting.
 
 In this post I'll port matklad's approach from Rust to Haskell and hook it up
 to the parallel property-based testing machinary from my previous post.
 
-* difference to matklad's post? (he doesn't use linearisability checking)
+Another difference between matklad and the approach in this post is that
+matklad uses an ad-hoc correctness criteria, whereas I follow the parallel
+property-based testing paper and use
+[linearisability](https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf). 
+
+An ad-hoc criteria can be faster than linearisability checking, but depending
+on how complicated your system is, it might be harder to find one.
+Linearisability checking on the other hand follows mechanically (for free) from
+a sequential (single-threaded) model/fake. 
+
+If you know what you are doing, then by all means figure out an ad-hoc
+correctness criteria like matklad does. If on the otherhand you haven't tested
+much concurrent code before, then I'd recommend starting with the
+linearisability checking approach that we are about to describe[^3].
 
 ## Motivation and overview
 
@@ -159,3 +171,8 @@ scheduler isn't too much work.
     because the interleaving of threads is non-deterministic we are unlucky and the
     race condition isn't triggered and the property passes, which stops the
     shrinking process.
+
+[^3]: Jepsen's [Knossos
+    checker](https://aphyr.com/posts/314-computational-techniques-in-knossos)
+    also uses linearisability checking and has found many
+    [bugs](https://jepsen.io/analyses), so we are in good company.
