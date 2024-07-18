@@ -93,6 +93,9 @@ The text book
 race condition is a counter which is incremented by two threads at the
 same time.
 
+One possible interleaving of the two threads that yields the correct
+result is the following:
+
 | Time | Thread 1       | Thread 2       |     | Integer value |
 |:-----|:---------------|:---------------|:---:|:--------------|
 | 0    |                |                |     | 0             |
@@ -102,6 +105,9 @@ same time.
 | 4    |                | read value     |  ←  | 1             |
 | 5    |                | increase value |     | 1             |
 | 6    |                | write back     |  →  | 2             |
+
+However there are other interleavings where one of the threads
+overwrites the other thread's increment, yielding an incorrect result:
 
 | Time | Thread 1       | Thread 2       |     | Integer value |
 |:-----|:---------------|:---------------|:---:|:--------------|
@@ -113,15 +119,26 @@ same time.
 | 5    | write back     |                |  →  | 1             |
 | 6    |                | write back     |  →  | 1             |
 
-different interleavings, we'd like to control which happens
+In most programming languages the thread interleaving is
+non-deterministic, and so we get irreproducible failures also sometimes
+known as "Heisenbugs".
 
-matklad's idea: insert pauses between each shared memory operation, have
-a scheduler unpause one thread at the time
+What we'd like to do is to be able to start a program with some token
+and if the same token is used then we get the same thread interleaving
+and therefore a reproducible result.
 
-- deterministic scheduler
-- parallel property-based testing recap
-- integrating the deterministic scheduler with parallel property-based
-  testing
+The idea, due to matklad, is to insert pauses between each shared memory
+operation (the reads and writes), have a scheduler unpause one thread at
+the time. The scheduler is parametrised by a seed which is used together
+with a pseudorandom number generator which allows it to
+deterministically choose which thread to unpause.
+
+In the rest of this post we will port matklad's deterministic scheduler
+from Rust to Haskell, hopefully in a way that shows that this can be
+done in any other language with decent multi-threaded programming
+primitives. Then we'll do a short recap of how parallel property-based
+testing works, and finally we'll hook up the deterministic schduler to
+the parallel property-based testing machinary.
 
 ## Deterministic scheduler
 
