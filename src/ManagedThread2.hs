@@ -16,11 +16,13 @@ data Signal = SingleThreaded | MultiThreaded (TMVar ())
   deriving Eq
 -- end snippet
 
+-- start snippet newSignal
 newSingleThreadedSignal :: Signal
 newSingleThreadedSignal = SingleThreaded
 
 newMultiThreadedSignal :: IO Signal
 newMultiThreadedSignal = MultiThreaded <$> newEmptyTMVarIO
+-- end snippet
 
 pause :: Signal -> IO ()
 pause SingleThreaded        = return ()

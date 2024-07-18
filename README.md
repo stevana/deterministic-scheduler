@@ -1,5 +1,8 @@
 # Parallel property-based testing with a deterministic thread scheduler
 
+*Work in progress, please don't share, but do feel free to get
+involved!*
+
 This post is about how to write tests that can catch race conditions in
 a reproducible way. The approach is programming language agnostic, and
 should work in most languages that have a decent multi-threaded story.
@@ -11,8 +14,7 @@ software under test.
 In my previous
 [post](https://stevana.github.io/the_sad_state_of_property-based_testing_libraries.html),
 we had a look at how to mechanically derive parallel tests that can
-uncover race conditions from a sequential (single-threaded) fake (think
-more elaborate test double than a mock).
+uncover race conditions from a sequential fake[^1].
 
 One of the nice things about the approach is that it's a black-box
 testing technique, i.e. it doesn't require the user to change the
@@ -21,25 +23,40 @@ software under test.
 One big downside is that because threads will interleave differently
 when we rerun the tests, there by potentially causing different
 outcomes. This in turn creates problems for the shrinking of failing
-test cases.
+test cases[^2].
 
-Workaround, module swap, grey-box?
+As a workaround, I suggested that when a race condition is found in the
+unmodified code, one could swap the shared memory module for one that
+introduces sleeps around the operations. This creates less
+non-determinism, because the jitter of each operation will have less of
+an impact, and therefore helps shrinking.
 
-Not satisfactory and I left a todo item to implement a determinstic
-scheduler, like in the PULSE paper
+This isn't a satisfactory solution, of course, and I left a to do item
+to implement a determinstic scheduler, like the authors do in the
+[paper](https://www.cse.chalmers.se/~nicsma/papers/finding-race-conditions.pdf)
+that first introduced parallel property-based testing.
 
-Finding Race Conditions in Erlang with QuickCheck and PULSE (ICFP 2009)
-<https://www.cse.chalmers.se/~nicsma/papers/finding-race-conditions.pdf>
+The idea of the deterministic scheduler is that it should be possible to
+rerun a multi-threaded program and get exactly the same interleaving of
+threads each time.
 
-the pulse scheduler was
+The deterministic scheduler from the above mentioned paper is called
+PULSE. It was
 [supposedly](http://quviq.com/documentation/pulse/index.html) released
-under the bsd license, but i've not been able to find it.
+under the BSD license, however I've not been able to find it.
 
-because of the way Erlang works with everything being triggered by
-messages, it seems reasonable that the PULSE scheduler merely acts as a
-man-in-the-middle proxy
+PULSE is written in Erlang and the paper uses it to test Erlang code. In
+Erlang everything is triggered by message passing, so I think that the
+correct way of thinking about what PULSE does is that it acts as a
+person-in-the-middle proxy. With other words, an Erlang process doesn't
+send a messaged directly to another process, but instead asks the
+scheduler to send it to the process. That way all messages go via the
+scheduler and it can choose the message order. Note that a seed can be
+used to introduce randomness, without introducing non-determinism.
 
-i implemented something like this 6 years ago:
+XXX: I implemented a scheduler like this for `distributed-process` in
+Haskell (think Haskell trying to be like Erlang) something like this 6
+years ago:
 <https://github.com/advancedtelematic/quickcheck-state-machine-distributed#readme>
 
 but i didn't know how to do it in a non-actor setting.
@@ -54,17 +71,23 @@ post.
 - difference to matklad's post? (he doesn't use linearisability
   checking)
 
-## Overview / motivation
+## Motivation and overview
 
 In order to explain what we'd like to do, it's helpful to consider an
 example of a race condition.
 
 counter, two concurrent increments
+<https://en.m.wikipedia.org/wiki/Database_transaction_schedule>
 
 different interleavings, we'd like to control which happens
 
 matklad's idea: insert pauses between each shared memory operation, have
 a scheduler unpause one thread at the time
+
+- deterministic scheduler
+- parallel property-based testing recap
+- integrating the deterministic scheduler with parallel property-based
+  testing
 
 ## Deterministic scheduler
 
@@ -77,6 +100,14 @@ blocks and putting something into a box that is full blocks as well. The
 ``` haskell
 data Signal = SingleThreaded | MultiThreaded (TMVar ())
   deriving Eq
+```
+
+``` haskell
+newSingleThreadedSignal :: Signal
+newSingleThreadedSignal = SingleThreaded
+
+newMultiThreadedSignal :: IO Signal
+newMultiThreadedSignal = MultiThreaded <$> newEmptyTMVarIO
 ```
 
 ## Parallel property-based testing recap
@@ -129,3 +160,24 @@ the deterministic scheduler isn't too much work.
   - intercept syscalls rr (and hermit?)
   - hypervisor (Antithesis)
   - language support for user schedulers
+
+[^1]: If you haven't heard of
+    [fakes](https://martinfowler.com/bliki/TestDouble.html) before,
+    think of them as a more elaborate test double than a mock. A mock of
+    a component expects to be called in some particular way (i.e.
+    exposes only some limited subset of the components API), and
+    typically throw an expeception when called in any other way. While a
+    fake exposes the full API and can be called just like the real
+    component, but unlike the real component it takes some shortcuts.
+    For example a fake might lose all data when restarted (i.e. keeps
+    all data in memory, while the real component persists the data to
+    some stable storage).
+
+[^2]: The reason for shrinking not working so well with non-determinism
+    is because shrinking stops when the property passes. So if some
+    input causes the property to fail and then we rerun the property on
+    a smaller input it might be the case that the smaller input still
+    contains the race condition, but because the interleaving of threads
+    is non-deterministic we are unlucky and the race condition isn't
+    triggered and the property passes, which stops the shrinking
+    process.
