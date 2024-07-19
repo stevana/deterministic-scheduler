@@ -176,6 +176,25 @@ newMultiThreadedSignal = MultiThreaded <$> newEmptyTMVarIO
 ```
 
 ``` haskell
+pause :: Signal -> IO ()
+pause SingleThreaded        = return ()
+pause (MultiThreaded tmvar) = atomically (takeTMVar tmvar)
+```
+
+``` haskell
+unpause :: Signal -> IO ()
+unpause SingleThreaded        = error
+  "unpause: a single thread should never be paused"
+unpause (MultiThreaded tmvar) = atomically (putTMVar tmvar ())
+```
+
+``` haskell
+isPaused :: Signal -> STM Bool
+isPaused SingleThreaded        = return False
+isPaused (MultiThreaded tmvar) = isEmptyTMVar tmvar
+```
+
+``` haskell
 waitUntilAllPaused :: [Signal] -> IO ()
 waitUntilAllPaused signals = atomically $ do
   bs <- mapM isPaused signals
@@ -308,20 +327,49 @@ get mem (AtomicCounter ref) = memReadIORef mem ref
 ```
 
 ``` haskell
-test' :: Int -> IO (Int, Bool, Int)
-test' seed = do
+test1 :: Int -> IO (Int, Bool, Int)
+test1 seed = do
   counter <- newCounter
   mtid1 <- spawn "0" (\signal -> incr (fakeMem signal) counter)
   mtid2 <- spawn "1" (\signal -> incr (fakeMem signal) counter)
   let gen  = mkStdGen seed
-  putStrLn "starting scheduler"
   _ <- schedule [mtid1, mtid2] gen
   two <- get realMem counter
   return (seed, two == 2, two)
 
-test2 :: IO ()
-test2 = mapM_ (\seed -> print =<< test' seed) [0..0]
+test :: IO ()
+test = mapM_ (\seed -> print =<< test1 seed) [0..10]
+test' :: IO ()
+test' = let seed = 2 in replicateM_ 10 (print =<< test1 seed)
 ```
+
+    >>> test
+    (0,True,2)
+    (1,True,2)
+    (2,False,1)
+    (3,True,2)
+    (4,False,1)
+    (5,True,2)
+    (6,False,1)
+    (7,False,1)
+    (8,True,2)
+    (9,True,2)
+    (10,False,1)
+
+``` {.haskell
+```
+
+    >>> test'
+    (2,False,1)
+    (2,False,1)
+    (2,False,1)
+    (2,False,1)
+    (2,False,1)
+    (2,False,1)
+    (2,False,1)
+    (2,False,1)
+    (2,False,1)
+    (2,False,1)
 
 ## Parallel property-based testing recap
 

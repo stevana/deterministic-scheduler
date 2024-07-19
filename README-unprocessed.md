@@ -153,10 +153,13 @@ around `MVar`s, we'll see an example of what these are useful for shortly.
 ```
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=newSignal .numberLines}
+```
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=pause .numberLines}
+```
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=unpause .numberLines}
+```
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=isPaused .numberLines}
 ```
@@ -189,6 +192,38 @@ around `MVar`s, we'll see an example of what these are useful for shortly.
 ```
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=test .numberLines}
+```
+
+```
+>>> test
+(0,True,2)
+(1,True,2)
+(2,False,1)
+(3,True,2)
+(4,False,1)
+(5,True,2)
+(6,False,1)
+(7,False,1)
+(8,True,2)
+(9,True,2)
+(10,False,1)
+```
+
+``` {.haskell include=src/ManagedThread2.hs snippet=test' .numberLines}
+```
+
+```
+>>> test'
+(2,False,1)
+(2,False,1)
+(2,False,1)
+(2,False,1)
+(2,False,1)
+(2,False,1)
+(2,False,1)
+(2,False,1)
+(2,False,1)
+(2,False,1)
 ```
 
 ## Parallel property-based testing recap

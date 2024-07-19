@@ -175,17 +175,21 @@ get mem (AtomicCounter ref) = memReadIORef mem ref
 ------------------------------------------------------------------------
 
 -- start snippet test
-test' :: Int -> IO (Int, Bool, Int)
-test' seed = do
+test1 :: Int -> IO (Int, Bool, Int)
+test1 seed = do
   counter <- newCounter
   mtid1 <- spawn "0" (\signal -> incr (fakeMem signal) counter)
   mtid2 <- spawn "1" (\signal -> incr (fakeMem signal) counter)
   let gen  = mkStdGen seed
-  putStrLn "starting scheduler"
   _ <- schedule [mtid1, mtid2] gen
   two <- get realMem counter
   return (seed, two == 2, two)
 
-test2 :: IO ()
-test2 = mapM_ (\seed -> print =<< test' seed) [0..0]
+test :: IO ()
+test = mapM_ (\seed -> print =<< test1 seed) [0..10]
+-- end snippet
+
+-- start snippet test'
+test' :: IO ()
+test' = let seed = 2 in replicateM_ 10 (print =<< test1 seed)
 -- end snippet
