@@ -175,8 +175,8 @@ get mem (AtomicCounter ref) = memReadIORef mem ref
 ------------------------------------------------------------------------
 
 -- start snippet test
-test1 :: Int -> IO (Int, Bool, Int)
-test1 seed = do
+test :: Int -> IO (Int, Bool, Int)
+test seed = do
   counter <- newCounter
   mtid1 <- spawn "0" (\signal -> incr (fakeMem signal) counter)
   mtid2 <- spawn "1" (\signal -> incr (fakeMem signal) counter)
@@ -185,11 +185,11 @@ test1 seed = do
   two <- get realMem counter
   return (seed, two == 2, two)
 
-test :: IO ()
-test = mapM_ (\seed -> print =<< test1 seed) [0..10]
+test1 :: IO ()
+test1 = mapM_ (\seed -> print =<< test seed) [0..10]
 -- end snippet
 
--- start snippet test'
-test' :: IO ()
-test' = let seed = 2 in replicateM_ 10 (print =<< test1 seed)
+-- start snippet test2
+test2 :: IO ()
+test2 = let seed = 2 in replicateM_ 10 (print =<< test seed)
 -- end snippet

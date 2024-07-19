@@ -209,7 +209,7 @@ around `MVar`s, we'll see an example of what these are useful for shortly.
 (10,False,1)
 ```
 
-``` {.haskell include=src/ManagedThread2.hs snippet=test' .numberLines}
+``` {.haskell include=src/ManagedThread2.hs snippet=test2 .numberLines}
 ```
 
 ```
