@@ -133,6 +133,8 @@ machinary.
 
 ## Deterministic scheduler
 
+### Thread-scheduler communication
+
 The scheduler needs to be able to communicate with the running threads, in
 order to be able to determinstically unpause, or "step", one thread at a time.
 
@@ -167,8 +169,7 @@ around `MVar`s, we'll see an example of what these are useful for shortly.
 ``` {.haskell include=src/ManagedThread2.hs snippet=waitUntilAllPaused .numberLines}
 ```
 
-``` {.haskell include=src/ManagedThread2.hs snippet=ManagedThreadId .numberLines}
-```
+### Managed thread abstraction
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=ManagedThreadId .numberLines}
 ```
@@ -178,6 +179,7 @@ around `MVar`s, we'll see an example of what these are useful for shortly.
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=getThreadStatus .numberLines}
 ```
+### Scheduler
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=schedule .numberLines}
 ```
@@ -185,17 +187,21 @@ around `MVar`s, we'll see an example of what these are useful for shortly.
 ``` {.haskell include=src/ManagedThread2.hs snippet=mapConcurrently .numberLines}
 ```
 
+### Shared memory
+
 ``` {.haskell include=src/ManagedThread2.hs snippet=SharedMemory .numberLines}
 ```
+
+### Example: broken atomic counter
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=AtomicCounter .numberLines}
 ```
 
-``` {.haskell include=src/ManagedThread2.hs snippet=test .numberLines}
+``` {.haskell include=src/ManagedThread2.hs snippet=test1 .numberLines}
 ```
 
 ```
->>> test
+>>> test1
 (0,True,2)
 (1,True,2)
 (2,False,1)
@@ -213,7 +219,7 @@ around `MVar`s, we'll see an example of what these are useful for shortly.
 ```
 
 ```
->>> test'
+>>> test2
 (2,False,1)
 (2,False,1)
 (2,False,1)

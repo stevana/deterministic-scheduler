@@ -142,6 +142,8 @@ the parallel property-based testing machinary.
 
 ## Deterministic scheduler
 
+### Thread-scheduler communication
+
 The scheduler needs to be able to communicate with the running threads,
 in order to be able to determinstically unpause, or "step", one thread
 at a time.
@@ -201,14 +203,7 @@ waitUntilAllPaused signals = atomically $ do
   guard (and bs)
 ```
 
-``` haskell
-data ManagedThreadId a = ManagedThreadId
-  { _mtidName   :: String
-  , _mtidSignal :: Signal
-  , _mtidAsync  :: Async a
-  }
-  deriving Eq
-```
+### Managed thread abstraction
 
 ``` haskell
 data ManagedThreadId a = ManagedThreadId
@@ -244,6 +239,8 @@ getThreadStatus mtid = atomically go
         Just (Left err) -> return (Threw err)
         Just (Right x)  -> return (Finished x)
 ```
+
+### Scheduler
 
 ``` haskell
 -- Wait until all threads are paused, then step one of them and wait until it
@@ -283,6 +280,8 @@ mapConcurrently f xs gen = do
   schedule mtids gen
 ```
 
+### Shared memory
+
 ``` haskell
 data SharedMemory a = SharedMemory
   { memReadIORef  :: IORef a -> IO a
@@ -308,6 +307,8 @@ fakeMem signal =
         -- pause signal
     }
 ```
+
+### Example: broken atomic counter
 
 ``` haskell
 data AtomicCounter = AtomicCounter (IORef Int)
@@ -339,11 +340,9 @@ test seed = do
 
 test1 :: IO ()
 test1 = mapM_ (\seed -> print =<< test seed) [0..10]
-test2 :: IO ()
-test2 = let seed = 2 in replicateM_ 10 (print =<< test seed)
 ```
 
-    >>> test
+    >>> test1
     (0,True,2)
     (1,True,2)
     (2,False,1)
@@ -361,7 +360,7 @@ test2 :: IO ()
 test2 = let seed = 2 in replicateM_ 10 (print =<< test seed)
 ```
 
-    >>> test'
+    >>> test2
     (2,False,1)
     (2,False,1)
     (2,False,1)

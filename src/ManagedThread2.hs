@@ -174,7 +174,7 @@ get mem (AtomicCounter ref) = memReadIORef mem ref
 
 ------------------------------------------------------------------------
 
--- start snippet test
+-- start snippet test1
 test :: Int -> IO (Int, Bool, Int)
 test seed = do
   counter <- newCounter
