@@ -142,11 +142,25 @@ the parallel property-based testing machinary.
 
 ## Deterministic scheduler
 
-The unpausing by the scheduler needs to happen via some channel, we'll
-use Haskell's `TMVar`s of this. `MVar`s can be thought of boxes that
-contain a value, where taking something out of a box that is empty
-blocks and putting something into a box that is full blocks as well. The
-`T` in `TMVar`s merely adds STM transactions around `MVar`s.
+The scheduler needs to be able to communicate with the running threads,
+in order to be able to determinstically unpause, or "step", one thread
+at a time.
+
+We'll use Haskell's `TMVar`s for this, but any kind of shared memory
+will do.
+
+Haskell's `MVar`s can be thought of boxes that contain a value, where
+taking something out of a box that is empty blocks and putting something
+into a box that is full blocks as well. Where "blocks" means that the
+run-time will suspend the thread that tries the blocking action and only
+wake it up when the `MVar` changes, i.e. it's an efficient way of
+waiting compared to
+[busy-waiting](https://en.wikipedia.org/wiki/Busy_waiting) or spinning.
+
+The `T` in `TMVar`s merely adds
+[STM](https://en.wikipedia.org/wiki/Software_transactional_memory)
+transactions around `MVar`s, we'll see an example of what these are
+useful for shortly.
 
 ``` haskell
 data Signal = SingleThreaded | MultiThreaded (TMVar ())
@@ -159,6 +173,139 @@ newSingleThreadedSignal = SingleThreaded
 
 newMultiThreadedSignal :: IO Signal
 newMultiThreadedSignal = MultiThreaded <$> newEmptyTMVarIO
+```
+
+``` haskell
+waitUntilAllPaused :: [Signal] -> IO ()
+waitUntilAllPaused signals = atomically $ do
+  bs <- mapM isPaused signals
+  guard (and bs)
+```
+
+``` haskell
+data ManagedThreadId a = ManagedThreadId
+  { _mtidName   :: String
+  , _mtidSignal :: Signal
+  , _mtidAsync  :: Async a
+  }
+  deriving Eq
+```
+
+``` haskell
+data ManagedThreadId a = ManagedThreadId
+  { _mtidName   :: String
+  , _mtidSignal :: Signal
+  , _mtidAsync  :: Async a
+  }
+  deriving Eq
+```
+
+``` haskell
+spawn :: String -> (Signal -> IO a) -> IO (ManagedThreadId a)
+spawn name io = do
+  s <- newMultiThreadedSignal
+  a <- async (io s)
+  return (ManagedThreadId name s a)
+```
+
+``` haskell
+```
+
+``` haskell
+-- Wait until all threads are paused, then step one of them and wait until it
+-- either pauses again or finishes. If it pauses again, then repeat the
+-- stepping. If it finishes, remove it from the list of stepped threads and
+-- continue stepping.
+schedule :: RandomGen g => [ManagedThreadId a] -> g -> IO ([a], g)
+schedule mtids0 gen0 = do
+  res <- timeout 1000000 (waitUntilAllPaused (map _mtidSignal mtids0))
+  case res of
+    Nothing -> error "schedule: all threads didn't pause within a second"
+    Just () -> do
+      -- putStrLn "all paused"
+      go mtids0 gen0 []
+  where
+    go :: RandomGen g => [ManagedThreadId a] -> g -> [a] -> IO ([a], g)
+    go []    gen acc = return (reverse acc, gen)
+    go mtids gen acc = do
+      let (ix, gen') = randomR (0, length mtids - 1) gen
+          mtid = mtids !! ix
+      -- putStrLn ("schedule, picked: " ++ _mtidName mtid)
+      unpause (_mtidSignal mtid)
+      status <- getThreadStatus mtid
+      case status of
+        Finished x -> do
+          -- putStrLn ("schedule, finished: " ++ _mtidName mtid)
+          go (mtids \\ [mtid]) gen' (x : acc)
+        Paused     -> go mtids gen' acc
+        Threw err  -> error ("schedule: " ++ show err)
+```
+
+``` haskell
+mapConcurrently :: RandomGen g => (Signal -> a -> IO b) -> [a] -> g -> IO ([b], g)
+mapConcurrently f xs gen = do
+  mtids <- forM (zip [0..] xs) $ \(i, x) ->
+    spawn ("Thread " ++ show i) (\sig -> f sig x)
+  schedule mtids gen
+```
+
+``` haskell
+data SharedMemory a = SharedMemory
+  { memReadIORef  :: IORef a -> IO a
+  , memWriteIORef :: IORef a -> a -> IO ()
+  }
+
+realMem :: SharedMemory a
+realMem = SharedMemory readIORef writeIORef
+
+fakeMem :: Signal -> SharedMemory a
+fakeMem signal =
+  SharedMemory
+    { memReadIORef = \ref -> do
+        pause signal
+        -- putStrLn "reading ref"
+        x <- readIORef ref
+        -- pause signal
+        return x
+    , memWriteIORef = \ref x -> do
+        pause signal
+        -- putStrLn "writing ref"
+        writeIORef ref x
+        -- pause signal
+    }
+```
+
+``` haskell
+data AtomicCounter = AtomicCounter (IORef Int)
+
+newCounter :: IO AtomicCounter
+newCounter = do
+  ref <- newIORef 0
+  return (AtomicCounter ref)
+
+incr :: SharedMemory Int -> AtomicCounter -> IO ()
+incr mem (AtomicCounter ref) = do
+  i <- memReadIORef mem ref
+  memWriteIORef mem ref (i + 1)
+
+get :: SharedMemory Int -> AtomicCounter -> IO Int
+get mem (AtomicCounter ref) = memReadIORef mem ref
+```
+
+``` haskell
+test' :: Int -> IO (Int, Bool, Int)
+test' seed = do
+  counter <- newCounter
+  mtid1 <- spawn "0" (\signal -> incr (fakeMem signal) counter)
+  mtid2 <- spawn "1" (\signal -> incr (fakeMem signal) counter)
+  let gen  = mkStdGen seed
+  putStrLn "starting scheduler"
+  _ <- schedule [mtid1, mtid2] gen
+  two <- get realMem counter
+  return (seed, two == 2, two)
+
+test2 :: IO ()
+test2 = mapM_ (\seed -> print =<< test' seed) [0..0]
 ```
 
 ## Parallel property-based testing recap
@@ -193,7 +340,179 @@ I don't want to reimplement the parallel property-based testing
 machinary from my previous post here, but merely show that integrating
 the deterministic scheduler isn't too much work.
 
+### Changes to sequential module
+
 ``` diff
+--- ../stateful-pbt-with-fakes/src/Stateful.hs  2024-06-20 09:02:07.618238490 +0200
++++ src/Stateful.hs 2024-07-11 06:59:12.547433661 +0200
+@@ -2,9 +2,10 @@
+ {-# LANGUAGE DerivingStrategies #-}
+ {-# LANGUAGE FlexibleContexts #-}
+ {-# LANGUAGE InstanceSigs #-}
++{-# LANGUAGE Rank2Types #-}
+ {-# LANGUAGE ScopedTypeVariables #-}
+-{-# LANGUAGE StrictData #-}
+ {-# LANGUAGE StandaloneDeriving #-}
++{-# LANGUAGE StrictData #-}
+ {-# LANGUAGE TypeFamilies #-}
+ {-# LANGUAGE UndecidableInstances #-}
+ 
+@@ -13,17 +14,21 @@
+ import Control.Monad
+ import Control.Monad.Catch
+ import Control.Monad.IO.Class
++import Data.Coerce
++import Data.Foldable
+ import Data.IntMap (IntMap)
+ import qualified Data.IntMap as IntMap
+-import Data.Foldable
+ import Data.Kind
+-import Data.Coerce
++import Data.Proxy
+ import Data.Set (Set)
+ import qualified Data.Set as Set
+ import Data.Void
+ import Test.QuickCheck hiding (Failure, Success)
++import Test.QuickCheck.Gen
+ import Test.QuickCheck.Monadic
+ 
++import qualified ManagedThread2 as Scheduler
++
+ ------------------------------------------------------------------------
+ 
+ class ( Monad (CommandMonad state)
+@@ -96,6 +101,13 @@
+   type CommandMonad state = IO
+ -- end snippet StateModel
+ 
++-- start snippet runCommandMonad
++  -- If another command monad is used we need to provide a way run it inside the
++  -- IO monad. This is only needed for parallel testing, because IO is the only
++  -- monad we can execute on different threads.
++  runCommandMonad :: proxy state -> CommandMonad state a -> Scheduler.Signal -> IO a
++-- end snippet runCommandMonad
++
+ ------------------------------------------------------------------------
+ 
+ -- start snippet Var
+@@ -219,10 +231,19 @@
+ -- Another option would be to introduce a new type class `ReturnsReferences` and
+ -- ask the user to manually implement it.
+ 
++hoist :: Monad m => (forall x. m x -> IO x) -> PropertyM m a -> PropertyM IO a
++hoist nat (MkPropertyM f) = MkPropertyM $ \g ->
++  let
++    MkGen h = f (fmap (fmap (return . ioProperty)) g)
++  in
++    MkGen (\r n -> nat (h r n))
++
+ -- start snippet runCommands
+ runCommands :: forall state. StateModel state
+-            => Commands state -> PropertyM (CommandMonad state) ()
+-runCommands (Commands cmds0) = go initialState emptyEnv cmds0
++            => Commands state -> PropertyM IO ()
++runCommands (Commands cmds0) =
++  hoist (flip (runCommandMonad (Proxy :: Proxy state)) Scheduler.newSingleThreadedSignal) $
++    go initialState emptyEnv cmds0
+   where
+     go :: state -> Env state -> [Command state (Var (Reference state))]
+        -> PropertyM (CommandMonad state) ()
+```
+
+### Changes to parallel module
+
+``` diff
+--- ../stateful-pbt-with-fakes/src/Parallel.hs  2024-06-26 12:29:51.889932357 +0200
++++ src/Parallel.hs 2024-07-11 06:59:32.502563455 +0200
+@@ -11,7 +11,6 @@
+ 
+ module Parallel where
+ 
+-import Control.Concurrent.Async
+ import Control.Concurrent.STM
+ import Control.Exception (SomeException, displayException, try)
+ import Control.Monad
+@@ -26,9 +25,13 @@
+ import Data.Set (Set)
+ import qualified Data.Set as Set
+ import Data.Tree
++import System.Random
+ import Test.QuickCheck
++import Test.QuickCheck.Gen
+ import Test.QuickCheck.Monadic
++import Test.QuickCheck.Random
+ 
++import qualified ManagedThread2 as Scheduler
+ import Stateful
+ 
+ ------------------------------------------------------------------------
+@@ -46,13 +49,6 @@
+   shrinkCommandParallel ss cmd = shrinkCommand (maximum ss) cmd
+ -- end snippet ParallelModel
+ 
+--- start snippet runCommandMonad
+-  -- If another command monad is used we need to provide a way run it inside the
+-  -- IO monad. This is only needed for parallel testing, because IO is the only
+-  -- monad we can execute on different threads.
+-  runCommandMonad :: proxy state -> CommandMonad state a -> IO a
+--- end snippet runCommandMonad
+-
+ -- start snippet ParallelCommands
+ newtype ParallelCommands state = ParallelCommands [Fork state]
+ 
+@@ -274,36 +270,41 @@
+ 
+ ------------------------------------------------------------------------
+ 
++getSeed :: PropertyM m QCGen
++getSeed = MkPropertyM (\f -> MkGen (\r n -> unGen (f r) r n))
++
+ -- start snippet runParallelCommands
+ runParallelCommands :: forall state. ParallelModel state
+                     => ParallelCommands state -> PropertyM IO ()
+ runParallelCommands cmds0@(ParallelCommands forks0) = do
++  gen <- getSeed
++  liftIO (putStrLn ("Seed: " ++ show gen))
+   forM_ (parallelCommands cmds0) $ \cmd -> do
+     let name = commandName cmd
+     monitor (tabulate "Commands" [name] . classify True name)
+   monitor (tabulate "Concurrency" (map (show . length . unFork) forks0))
+   q   <- liftIO newTQueueIO
+   c   <- liftIO newAtomicCounter
+-  env <- liftIO (runForks q c emptyEnv forks0)
++  (env, _gen') <- liftIO (runForks q c emptyEnv gen forks0)
+   hist <- History <$> liftIO (atomically (flushTQueue q))
+   let ok = linearisable env (interleavings hist)
+   unless ok (monitor (counterexample (show hist)))
+   assert ok
+   where
+-    runForks :: TQueue (Event state) -> AtomicCounter -> Env state -> [Fork state]
+-             -> IO (Env state)
+-    runForks _q _c env [] = return env
+-    runForks  q  c env (Fork cmds : forks) = do
+-      envs <- liftIO $
+-        mapConcurrently (runParallelReal q c env) (zip [Pid 0..] cmds)
++    runForks :: RandomGen g => TQueue (Event state) -> AtomicCounter -> Env state -> g
++             -> [Fork state] -> IO (Env state, g)
++    runForks _q _c env gen [] = return (env, gen)
++    runForks  q  c env gen (Fork cmds : forks) = do
++      (envs, gen') <- liftIO $
++        Scheduler.mapConcurrently (runParallelReal q c env) (zip [Pid 0..] cmds) gen
+       let env' = combineEnvs (env : envs)
+-      runForks q c env' forks
++      runForks q c env' gen' forks
+ 
+     runParallelReal :: TQueue (Event state) -> AtomicCounter -> Env state
+-                    -> (Pid, Command state (Var (Reference state))) -> IO (Env state)
+-    runParallelReal q c env (pid, cmd) = do
++                    -> Scheduler.Signal -> (Pid, Command state (Var (Reference state))) -> IO (Env state)
++    runParallelReal q c env signal (pid, cmd) = do
+       atomically (writeTQueue q (Invoke pid cmd))
+-      eResp <- try (runCommandMonad (Proxy :: Proxy state) (runReal (fmap (lookupEnv env) cmd)))
++      eResp <- try (runCommandMonad (Proxy :: Proxy state) (runReal (fmap (lookupEnv env) cmd)) signal)
+       case eResp of
+         Left (err :: SomeException) ->
+           error ("runParallelReal: " ++ displayException err)
 ```
 
 ## Conclusion and further work

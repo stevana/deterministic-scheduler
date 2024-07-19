@@ -24,39 +24,52 @@ newMultiThreadedSignal :: IO Signal
 newMultiThreadedSignal = MultiThreaded <$> newEmptyTMVarIO
 -- end snippet
 
+-- start snippet pause
 pause :: Signal -> IO ()
 pause SingleThreaded        = return ()
 pause (MultiThreaded tmvar) = atomically (takeTMVar tmvar)
+-- end snippet
 
+-- start snippet unpause
 unpause :: Signal -> IO ()
 unpause SingleThreaded        = error
   "unpause: a single thread should never be paused"
 unpause (MultiThreaded tmvar) = atomically (putTMVar tmvar ())
+-- end snippet
 
+-- start snippet isPaused
 isPaused :: Signal -> STM Bool
 isPaused SingleThreaded        = return False
 isPaused (MultiThreaded tmvar) = isEmptyTMVar tmvar
+-- end snippet
 
+-- start snippet waitUntilAllPaused
 waitUntilAllPaused :: [Signal] -> IO ()
 waitUntilAllPaused signals = atomically $ do
   bs <- mapM isPaused signals
   guard (and bs)
+-- end snippet
 
 ------------------------------------------------------------------------
 
+-- start snippet ManagedThreadId
 data ManagedThreadId a = ManagedThreadId
   { _mtidName   :: String
   , _mtidSignal :: Signal
   , _mtidAsync  :: Async a
   }
   deriving Eq
+-- end snippet
 
+-- start snippet spawn
 spawn :: String -> (Signal -> IO a) -> IO (ManagedThreadId a)
 spawn name io = do
   s <- newMultiThreadedSignal
   a <- async (io s)
   return (ManagedThreadId name s a)
+-- end snippet
 
+-- start snippet ThreadStatus
 data ThreadStatus a = Paused | Finished a | Threw SomeException
 
 getThreadStatus :: ManagedThreadId a -> IO (ThreadStatus a)
@@ -72,7 +85,9 @@ getThreadStatus mtid = atomically go
           else go
         Just (Left err) -> return (Threw err)
         Just (Right x)  -> return (Finished x)
+-- end snippet
 
+-- start snippet schedule
 -- Wait until all threads are paused, then step one of them and wait until it
 -- either pauses again or finishes. If it pauses again, then repeat the
 -- stepping. If it finishes, remove it from the list of stepped threads and
@@ -100,15 +115,19 @@ schedule mtids0 gen0 = do
           go (mtids \\ [mtid]) gen' (x : acc)
         Paused     -> go mtids gen' acc
         Threw err  -> error ("schedule: " ++ show err)
+-- end snippet
 
+-- start snippet mapConcurrently
 mapConcurrently :: RandomGen g => (Signal -> a -> IO b) -> [a] -> g -> IO ([b], g)
 mapConcurrently f xs gen = do
   mtids <- forM (zip [0..] xs) $ \(i, x) ->
     spawn ("Thread " ++ show i) (\sig -> f sig x)
   schedule mtids gen
+-- end snippet
 
 ------------------------------------------------------------------------
 
+-- start snippet SharedMemory
 data SharedMemory a = SharedMemory
   { memReadIORef  :: IORef a -> IO a
   , memWriteIORef :: IORef a -> a -> IO ()
@@ -132,9 +151,11 @@ fakeMem signal =
         writeIORef ref x
         -- pause signal
     }
+-- end snippet
 
 ------------------------------------------------------------------------
 
+-- start snippet AtomicCounter
 data AtomicCounter = AtomicCounter (IORef Int)
 
 newCounter :: IO AtomicCounter
@@ -149,9 +170,11 @@ incr mem (AtomicCounter ref) = do
 
 get :: SharedMemory Int -> AtomicCounter -> IO Int
 get mem (AtomicCounter ref) = memReadIORef mem ref
+-- end snippet
 
 ------------------------------------------------------------------------
 
+-- start snippet test
 test' :: Int -> IO (Int, Bool, Int)
 test' seed = do
   counter <- newCounter
@@ -165,3 +188,4 @@ test' seed = do
 
 test2 :: IO ()
 test2 = mapM_ (\seed -> print =<< test' seed) [0..0]
+-- end snippet
