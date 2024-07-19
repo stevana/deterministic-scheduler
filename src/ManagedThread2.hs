@@ -69,7 +69,7 @@ spawn name io = do
   return (ManagedThreadId name s a)
 -- end snippet
 
--- start snippet ThreadStatus
+-- start snippet getThreadStatus
 data ThreadStatus a = Paused | Finished a | Threw SomeException
 
 getThreadStatus :: ManagedThreadId a -> IO (ThreadStatus a)

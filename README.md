@@ -209,6 +209,21 @@ spawn name io = do
 ```
 
 ``` haskell
+data ThreadStatus a = Paused | Finished a | Threw SomeException
+
+getThreadStatus :: ManagedThreadId a -> IO (ThreadStatus a)
+getThreadStatus mtid = atomically go
+  where
+    go = do
+      res <- pollSTM (_mtidAsync mtid)
+      case res of
+        Nothing -> do
+          b <- isPaused (_mtidSignal mtid)
+          if b
+          then return Paused
+          else go
+        Just (Left err) -> return (Threw err)
+        Just (Right x)  -> return (Finished x)
 ```
 
 ``` haskell
