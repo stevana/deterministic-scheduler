@@ -285,15 +285,15 @@ runParallelCommands cmds0@(ParallelCommands forks0) = do
   monitor (tabulate "Concurrency" (map (show . length . unFork) forks0))
   q   <- liftIO newTQueueIO
   c   <- liftIO newAtomicCounter
-  (env, _gen') <- liftIO (runForks q c emptyEnv gen forks0)
+  env <- liftIO (runForks q c emptyEnv gen forks0)
   hist <- History <$> liftIO (atomically (flushTQueue q))
   let ok = linearisable env (interleavings hist)
   unless ok (monitor (counterexample (show hist)))
   assert ok
   where
     runForks :: RandomGen g => TQueue (Event state) -> AtomicCounter -> Env state -> g
-             -> [Fork state] -> IO (Env state, g)
-    runForks _q _c env gen [] = return (env, gen)
+             -> [Fork state] -> IO (Env state)
+    runForks _q _c env _gen [] = return env
     runForks  q  c env gen (Fork cmds : forks) = do
       (envs, gen') <- liftIO $
         Scheduler.mapConcurrently (runParallelReal q c env) (zip [Pid 0..] cmds) gen

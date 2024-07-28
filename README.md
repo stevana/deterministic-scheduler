@@ -142,6 +142,14 @@ the parallel property-based testing machinary.
 
 ## Deterministic scheduler
 
+The implementation of the deterministic scheduler can be split up in
+three parts. First we'll implement a way for the spawned threads to
+communicate with the scheduler, this communication channel will be used
+to pause and unpause the threads. After that we'll make a wrapper
+datatype around Haskell's threads which also includes the communication
+channel. Finally, we'll have all the pieces to implement the
+deterministic scheduler itself.
+
 ### Thread-scheduler communication
 
 The scheduler needs to be able to communicate with the running threads,
@@ -164,10 +172,15 @@ The `T` in `TMVar`s merely adds
 transactions around `MVar`s, we'll see an example of what these are
 useful for shortly.
 
+We'll call our communcation channel `Signal`:
+
 ``` haskell
 data Signal = SingleThreaded | MultiThreaded (TMVar ())
   deriving Eq
 ```
+
+There are two ways to create a `Signal`, one for single-threaded and
+another for multi-threaded execution:
 
 ``` haskell
 newSingleThreadedSignal :: Signal
@@ -177,11 +190,22 @@ newMultiThreadedSignal :: IO Signal
 newMultiThreadedSignal = MultiThreaded <$> newEmptyTMVarIO
 ```
 
+The idea being that in the single-threaded case the scheduler shouldn't
+be doing anything. In particular pausing a thread in the single-threaded
+case is a no-op:
+
 ``` haskell
 pause :: Signal -> IO ()
 pause SingleThreaded        = return ()
 pause (MultiThreaded tmvar) = atomically (takeTMVar tmvar)
 ```
+
+Notice that in the multi-threaded case the pause operation will try to
+take a value from the `TMVar` and also notice that the `TMVar` starts
+off being empty, so this will cause the thread to block.
+
+The way the scheduler can unpause the thread is by putting a unit value
+into the `TMVar`, which will cause the `takeTMVar` finish.
 
 ``` haskell
 unpause :: Signal -> IO ()
@@ -190,11 +214,16 @@ unpause SingleThreaded        = error
 unpause (MultiThreaded tmvar) = atomically (putTMVar tmvar ())
 ```
 
+For our scheduler implementation we'll also need a way to check if a
+thread is paused:
+
 ``` haskell
 isPaused :: Signal -> STM Bool
 isPaused SingleThreaded        = return False
 isPaused (MultiThreaded tmvar) = isEmptyTMVar tmvar
 ```
+
+It's also useful to be able to check if all threads are paused:
 
 ``` haskell
 waitUntilAllPaused :: [Signal] -> IO ()
@@ -203,7 +232,15 @@ waitUntilAllPaused signals = atomically $ do
   guard (and bs)
 ```
 
-### Managed thread abstraction
+Notice that STM makes this easy as we can do this check atomically.
+
+### Managed threads
+
+Having implemented the communication channel between the thread and the
+scheduler, we are now ready to introduce our "managed" threads (we call
+them "managed" because they are managed by the scheduler). These threads
+are basically a wrapper around Haskell's `Async` threads that also
+includes our communication channel, `Signal`.
 
 ``` haskell
 data ManagedThreadId a = ManagedThreadId
@@ -214,6 +251,8 @@ data ManagedThreadId a = ManagedThreadId
   deriving Eq
 ```
 
+Our managed thread can be spawned as follows:
+
 ``` haskell
 spawn :: String -> (Signal -> IO a) -> IO (ManagedThreadId a)
 spawn name io = do
@@ -221,6 +260,14 @@ spawn name io = do
   a <- async (io s)
   return (ManagedThreadId name s a)
 ```
+
+Noticed that the spawned IO action gets access to the communication
+channel.
+
+The `Async` thread API exposes a way to check if a thread is still
+executing, threw an exeception or finished yeilding a result. We'll
+extend this by also being able to check if the thread is paused as
+follows.
 
 ``` haskell
 data ThreadStatus a = Paused | Finished a | Threw SomeException
@@ -241,6 +288,14 @@ getThreadStatus mtid = atomically go
 ```
 
 ### Scheduler
+
+We now got all the pieces we need to implement our deterministic
+scheduler.
+
+The idea is to wait until all threads are paused, then step one of them
+and wait until it either pauses again or finishes. If it pauses again,
+then repeat the stepping. If it finishes, remove it from the list of
+stepped threads and continue stepping.
 
 ``` haskell
 -- Wait until all threads are paused, then step one of them and wait until it
@@ -272,6 +327,8 @@ schedule mtids0 gen0 = do
         Threw err  -> error ("schedule: " ++ show err)
 ```
 
+We can now also implement a useful higher-level combinator:
+
 ``` haskell
 mapConcurrently :: RandomGen g => (Signal -> a -> IO b) -> [a] -> g -> IO ([b], g)
 mapConcurrently f xs gen = do
@@ -280,7 +337,7 @@ mapConcurrently f xs gen = do
   schedule mtids gen
 ```
 
-### Shared memory
+### Example: broken atomic counter
 
 ``` haskell
 data SharedMemory a = SharedMemory
@@ -307,8 +364,6 @@ fakeMem signal =
         -- pause signal
     }
 ```
-
-### Example: broken atomic counter
 
 ``` haskell
 data AtomicCounter = AtomicCounter (IORef Int)
@@ -381,7 +436,9 @@ value of two, if we start counting from zero and increment by one).
 However for more complicated scenarios it gets less clear, consider:
 
 - two concurrent incrs + get
-- crashing threads
+- timeouts / crashing threads
+- more complicated datastructures than a counter, e.g. key-value store
+  with deletes
 
 Luckily there's a correctness criteria for concurrent programs like
 these which is based on a sequential model:
@@ -397,6 +454,8 @@ The idea in a nutshell: execute commands in parallel, collect a
 concurrent history of when each command started and stopped executing,
 try to find an interleaving of commands which satisfies the sequential
 model.
+
+- eventual consistency?
 
 ## Integrating the scheduler into the testing
 
@@ -487,7 +546,7 @@ the deterministic scheduler isn't too much work.
 
 ``` diff
 --- ../stateful-pbt-with-fakes/src/Parallel.hs  2024-06-26 12:29:51.889932357 +0200
-+++ src/Parallel.hs 2024-07-11 06:59:32.502563455 +0200
++++ src/Parallel.hs 2024-07-20 12:09:08.552438099 +0200
 @@ -11,7 +11,6 @@
  
  module Parallel where
@@ -544,7 +603,7 @@ the deterministic scheduler isn't too much work.
    q   <- liftIO newTQueueIO
    c   <- liftIO newAtomicCounter
 -  env <- liftIO (runForks q c emptyEnv forks0)
-+  (env, _gen') <- liftIO (runForks q c emptyEnv gen forks0)
++  env <- liftIO (runForks q c emptyEnv gen forks0)
    hist <- History <$> liftIO (atomically (flushTQueue q))
    let ok = linearisable env (interleavings hist)
    unless ok (monitor (counterexample (show hist)))
@@ -557,8 +616,8 @@ the deterministic scheduler isn't too much work.
 -      envs <- liftIO $
 -        mapConcurrently (runParallelReal q c env) (zip [Pid 0..] cmds)
 +    runForks :: RandomGen g => TQueue (Event state) -> AtomicCounter -> Env state -> g
-+             -> [Fork state] -> IO (Env state, g)
-+    runForks _q _c env gen [] = return (env, gen)
++             -> [Fork state] -> IO (Env state)
++    runForks _q _c env _gen [] = return env
 +    runForks  q  c env gen (Fork cmds : forks) = do
 +      (envs, gen') <- liftIO $
 +        Scheduler.mapConcurrently (runParallelReal q c env) (zip [Pid 0..] cmds) gen
@@ -577,6 +636,98 @@ the deterministic scheduler isn't too much work.
        case eResp of
          Left (err :: SomeException) ->
            error ("runParallelReal: " ++ displayException err)
+```
+
+### Changes to the counter example
+
+``` diff
+--- ../stateful-pbt-with-fakes/src/Example/Counter.hs   2024-06-12 13:28:50.091284859 +0200
++++ src/Example/Counter.hs  2024-07-11 07:00:34.758195571 +0200
+@@ -6,14 +6,14 @@
+ 
+ module Example.Counter where
+ 
+-import Control.Concurrent (threadDelay)
+-import Control.Monad
++import Control.Monad.Reader
+ import Data.IORef
+ import Data.Void
+ import System.IO.Unsafe
+ import Test.QuickCheck
+ import Test.QuickCheck.Monadic
+ 
++import qualified ManagedThread2 as Scheduler
+ import Parallel
+ import Stateful
+ 
+@@ -31,16 +31,18 @@
+   (\n -> if n == 42 then (n, ()) else (n + 1, ()))
+ 
+ -- start snippet incrRaceCondition
+-incrRaceCondition :: IO ()
++incrRaceCondition :: ReaderT Scheduler.Signal IO ()
+ incrRaceCondition = do
+-  n <- readIORef gLOBAL_COUNTER
+-  threadDelay 100
+-  writeIORef gLOBAL_COUNTER (n + 1)
+-  threadDelay 100
++  sig <- ask
++  let mem = Scheduler.fakeMem sig
++  n <- liftIO (Scheduler.memReadIORef mem gLOBAL_COUNTER)
++  liftIO (Scheduler.memWriteIORef mem gLOBAL_COUNTER (n + 1))
+ -- end snippet incrRaceCondition
+ 
+-get :: IO Int
+-get = readIORef gLOBAL_COUNTER
++get :: ReaderT Scheduler.Signal IO Int
++get = do
++  sig <- ask
++  liftIO (Scheduler.memReadIORef (Scheduler.fakeMem sig) gLOBAL_COUNTER)
+ 
+ reset :: IO ()
+ reset = writeIORef gLOBAL_COUNTER 0
+@@ -81,9 +83,11 @@
+   runFake Incr  (Counter n) = return (Counter (n + 1), Incr_ ())
+   runFake Get m@(Counter n) = return (m, Get_ n)
+ 
++  type CommandMonad Counter = ReaderT Scheduler.Signal IO
++
+   -- We also need to explain which part of the counter API each command
+   -- corresponds to.
+-  runReal :: Command Counter r -> IO (Response Counter r)
++  runReal :: Command Counter r -> ReaderT Scheduler.Signal IO (Response Counter r)
+   runReal Get  = Get_  <$> get
+   -- runReal Incr = Incr_ <$> incr
+   -- runReal Incr = Incr_ <$> incr42Bug
+@@ -94,22 +98,20 @@
+   -- This example has no references.
+   type Reference Counter = Void
+ 
++  runCommandMonad _ m sig = runReaderT m sig
++
+ prop_counter :: Commands Counter -> Property
+ prop_counter cmds = monadicIO $ do
+-  run reset
++  liftIO reset
+   runCommands cmds
+   assert True
+ 
+ -- start snippet parallel-counter
+-instance ParallelModel Counter where
+-
+-  -- The command monad is IO, so we don't need to do anything here.
+-  runCommandMonad _ = id
++instance ParallelModel Counter
+ 
+ prop_parallelCounter :: ParallelCommands Counter -> Property
+ prop_parallelCounter cmds = monadicIO $ do
+-  replicateM_ 10 $ do
+-    run reset
+-    runParallelCommands cmds
++  run reset
++  runParallelCommands cmds
+   assert True
+ -- end snippet parallel-counter
 ```
 
 ## Conclusion and further work
