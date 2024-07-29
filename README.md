@@ -339,6 +339,11 @@ mapConcurrently f xs gen = do
 
 ### Example: broken atomic counter
 
+To show that our scheduler is indeed deterministic, let's implement the
+race condition between two increments from the introduction.
+
+First let's introduce an interface for shared memory.
+
 ``` haskell
 data SharedMemory a = SharedMemory
   { memReadIORef  :: IORef a -> IO a
@@ -365,6 +370,15 @@ fakeMem signal =
     }
 ```
 
+The idea is that we will use two different instances of this interface:
+a "real" one which just does what we'd expect from shared memory, and a
+"fake" one which pauses around the real operations. The real one will be
+used when we deploy the actual software and the fake one while we do our
+testing.
+
+We can now implement our counter example against the shared memory
+interface:
+
 ``` haskell
 data AtomicCounter = AtomicCounter (IORef Int)
 
@@ -382,6 +396,9 @@ get :: SharedMemory Int -> AtomicCounter -> IO Int
 get mem (AtomicCounter ref) = memReadIORef mem ref
 ```
 
+Finally, we can implement the race condition test using the counter and
+two threads that do increments:
+
 ``` haskell
 test :: Int -> IO (Int, Bool, Int)
 test seed = do
@@ -397,6 +414,9 @@ test1 :: IO ()
 test1 = mapM_ (\seed -> print =<< test seed) [0..10]
 ```
 
+The test is parametrised by a seed for the scheduler. If we run it with
+different seeds we get different outcomes:
+
     >>> test1
     (0,True,2)
     (1,True,2)
@@ -410,10 +430,14 @@ test1 = mapM_ (\seed -> print =<< test seed) [0..10]
     (9,True,2)
     (10,False,1)
 
+If we fix the seed to one which makes our test fail:
+
 ``` haskell
 test2 :: IO ()
 test2 = let seed = 2 in replicateM_ 10 (print =<< test seed)
 ```
+
+then we get the same outcome everytime:
 
     >>> test2
     (2,False,1)
@@ -426,6 +450,9 @@ test2 = let seed = 2 in replicateM_ 10 (print =<< test seed)
     (2,False,1)
     (2,False,1)
     (2,False,1)
+
+These quick tests seem to suggest that our scheduler is in fact
+deterministic.
 
 ## Parallel property-based testing recap
 
@@ -463,73 +490,30 @@ I don't want to reimplement the parallel property-based testing
 machinary from my previous post here, but merely show that integrating
 the deterministic scheduler isn't too much work.
 
+We need to change the code from the previous post in three different
+places: the sequential module, the parallel module and the counter
+example itself.
+
 ### Changes to sequential module
 
+First we import the library code that we wrote above in this post:
+
 ``` diff
---- ../stateful-pbt-with-fakes/src/Stateful.hs  2024-06-20 09:02:07.618238490 +0200
-+++ src/Stateful.hs 2024-07-11 06:59:12.547433661 +0200
-@@ -2,9 +2,10 @@
- {-# LANGUAGE DerivingStrategies #-}
- {-# LANGUAGE FlexibleContexts #-}
- {-# LANGUAGE InstanceSigs #-}
-+{-# LANGUAGE Rank2Types #-}
- {-# LANGUAGE ScopedTypeVariables #-}
--{-# LANGUAGE StrictData #-}
- {-# LANGUAGE StandaloneDeriving #-}
-+{-# LANGUAGE StrictData #-}
- {-# LANGUAGE TypeFamilies #-}
- {-# LANGUAGE UndecidableInstances #-}
- 
-@@ -13,17 +14,21 @@
- import Control.Monad
- import Control.Monad.Catch
- import Control.Monad.IO.Class
-+import Data.Coerce
-+import Data.Foldable
- import Data.IntMap (IntMap)
- import qualified Data.IntMap as IntMap
--import Data.Foldable
- import Data.Kind
--import Data.Coerce
-+import Data.Proxy
- import Data.Set (Set)
- import qualified Data.Set as Set
- import Data.Void
- import Test.QuickCheck hiding (Failure, Success)
-+import Test.QuickCheck.Gen
- import Test.QuickCheck.Monadic
- 
 +import qualified ManagedThread2 as Scheduler
-+
- ------------------------------------------------------------------------
- 
- class ( Monad (CommandMonad state)
-@@ -96,6 +101,13 @@
-   type CommandMonad state = IO
- -- end snippet StateModel
- 
-+-- start snippet runCommandMonad
-+  -- If another command monad is used we need to provide a way run it inside the
-+  -- IO monad. This is only needed for parallel testing, because IO is the only
-+  -- monad we can execute on different threads.
+```
+
+Then we move the `runCommandMonad` method from the `ParallelModel` class
+into the `StateModel` class and change it so that it has access to the
+communication channel to the scheduler (`Signal`):
+
+``` diff
 +  runCommandMonad :: proxy state -> CommandMonad state a -> Scheduler.Signal -> IO a
-+-- end snippet runCommandMonad
-+
- ------------------------------------------------------------------------
- 
- -- start snippet Var
-@@ -219,10 +231,19 @@
- -- Another option would be to introduce a new type class `ReturnsReferences` and
- -- ask the user to manually implement it.
- 
-+hoist :: Monad m => (forall x. m x -> IO x) -> PropertyM m a -> PropertyM IO a
-+hoist nat (MkPropertyM f) = MkPropertyM $ \g ->
-+  let
-+    MkGen h = f (fmap (fmap (return . ioProperty)) g)
-+  in
-+    MkGen (\r n -> nat (h r n))
-+
- -- start snippet runCommands
+```
+
+We then change the `runCommands` function to use `runCommandMonad` and
+use a single-threaded `Signal`, i.e. one that doesn't do any pauses:
+
+``` diff
  runCommands :: forall state. StateModel state
 -            => Commands state -> PropertyM (CommandMonad state) ()
 -runCommands (Commands cmds0) = go initialState emptyEnv cmds0
@@ -542,55 +526,34 @@ the deterministic scheduler isn't too much work.
         -> PropertyM (CommandMonad state) ()
 ```
 
+In order for this to typecheck we need a helper function that changes
+the underlying monad of a `PropertyM` (QuickCheck's monadic properties):
+
+``` diff
++hoist :: Monad m => (forall x. m x -> IO x) -> PropertyM m a -> PropertyM IO a
++hoist nat (MkPropertyM f) = MkPropertyM $ \g ->
++  let
++    MkGen h = f (fmap (fmap (return . ioProperty)) g)
++  in
++    MkGen (\r n -> nat (h r n))
+```
+
 ### Changes to parallel module
 
 ``` diff
---- ../stateful-pbt-with-fakes/src/Parallel.hs  2024-06-26 12:29:51.889932357 +0200
-+++ src/Parallel.hs 2024-07-20 12:09:08.552438099 +0200
-@@ -11,7 +11,6 @@
- 
- module Parallel where
- 
--import Control.Concurrent.Async
- import Control.Concurrent.STM
- import Control.Exception (SomeException, displayException, try)
- import Control.Monad
-@@ -26,9 +25,13 @@
- import Data.Set (Set)
- import qualified Data.Set as Set
- import Data.Tree
-+import System.Random
- import Test.QuickCheck
-+import Test.QuickCheck.Gen
- import Test.QuickCheck.Monadic
-+import Test.QuickCheck.Random
- 
 +import qualified ManagedThread2 as Scheduler
- import Stateful
- 
- ------------------------------------------------------------------------
-@@ -46,13 +49,6 @@
-   shrinkCommandParallel ss cmd = shrinkCommand (maximum ss) cmd
- -- end snippet ParallelModel
- 
---- start snippet runCommandMonad
--  -- If another command monad is used we need to provide a way run it inside the
--  -- IO monad. This is only needed for parallel testing, because IO is the only
--  -- monad we can execute on different threads.
+```
+
+``` diff
 -  runCommandMonad :: proxy state -> CommandMonad state a -> IO a
---- end snippet runCommandMonad
--
- -- start snippet ParallelCommands
- newtype ParallelCommands state = ParallelCommands [Fork state]
- 
-@@ -274,36 +270,41 @@
- 
- ------------------------------------------------------------------------
- 
+```
+
+``` diff
 +getSeed :: PropertyM m QCGen
 +getSeed = MkPropertyM (\f -> MkGen (\r n -> unGen (f r) r n))
-+
- -- start snippet runParallelCommands
+```
+
+``` diff
  runParallelCommands :: forall state. ParallelModel state
                      => ParallelCommands state -> PropertyM IO ()
  runParallelCommands cmds0@(ParallelCommands forks0) = do
