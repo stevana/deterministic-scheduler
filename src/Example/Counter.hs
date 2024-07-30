@@ -31,18 +31,14 @@ incr42Bug = atomicModifyIORef' gLOBAL_COUNTER
   (\n -> if n == 42 then (n, ()) else (n + 1, ()))
 
 -- start snippet incrRaceCondition
-incrRaceCondition :: ReaderT Scheduler.Signal IO ()
-incrRaceCondition = do
-  sig <- ask
-  let mem = Scheduler.fakeMem sig
+incrRaceCondition :: Scheduler.SharedMemory Int -> IO ()
+incrRaceCondition mem = do
   n <- liftIO (Scheduler.memReadIORef mem gLOBAL_COUNTER)
-  liftIO (Scheduler.memWriteIORef mem gLOBAL_COUNTER (n + 1))
+  Scheduler.memWriteIORef mem gLOBAL_COUNTER (n + 1)
 -- end snippet incrRaceCondition
 
-get :: ReaderT Scheduler.Signal IO Int
-get = do
-  sig <- ask
-  liftIO (Scheduler.memReadIORef (Scheduler.fakeMem sig) gLOBAL_COUNTER)
+get :: Scheduler.SharedMemory Int -> IO Int
+get mem = Scheduler.memReadIORef mem gLOBAL_COUNTER
 
 reset :: IO ()
 reset = writeIORef gLOBAL_COUNTER 0
@@ -87,13 +83,17 @@ instance StateModel Counter where
 
   -- We also need to explain which part of the counter API each command
   -- corresponds to.
+  -- start snippet runReal
   runReal :: Command Counter r -> ReaderT Scheduler.Signal IO (Response Counter r)
-  runReal Get  = Get_  <$> get
+  runReal cmd = do
+    sig <- ask
+    let mem = Scheduler.fakeMem sig
+    case cmd of
+      Get  -> liftIO (Get_  <$> get mem)
+      Incr -> liftIO (Incr_ <$> incrRaceCondition mem)
+  -- end snippet runReal
   -- runReal Incr = Incr_ <$> incr
   -- runReal Incr = Incr_ <$> incr42Bug
-  -- start snippet runReal
-  runReal Incr = Incr_ <$> incrRaceCondition
-  -- end snippet runReal
 
   -- This example has no references.
   type Reference Counter = Void

@@ -298,10 +298,6 @@ then repeat the stepping. If it finishes, remove it from the list of
 stepped threads and continue stepping.
 
 ``` haskell
--- Wait until all threads are paused, then step one of them and wait until it
--- either pauses again or finishes. If it pauses again, then repeat the
--- stepping. If it finishes, remove it from the list of stepped threads and
--- continue stepping.
 schedule :: RandomGen g => [ManagedThreadId a] -> g -> IO ([a], g)
 schedule mtids0 gen0 = do
   res <- timeout 1000000 (waitUntilAllPaused (map _mtidSignal mtids0))
@@ -540,18 +536,30 @@ the underlying monad of a `PropertyM` (QuickCheck's monadic properties):
 
 ### Changes to parallel module
 
+Again we import the deterministic scheduler that we defined in this
+post:
+
 ``` diff
 +import qualified ManagedThread2 as Scheduler
 ```
+
+As we said above, the `runCommandMonad` method was moved into the
+sequential testing module:
 
 ``` diff
 -  runCommandMonad :: proxy state -> CommandMonad state a -> IO a
 ```
 
+We'll reuse QuickCheck's seed for our scheduler, the following helper
+function extracts the seed from QuickCheck's `PropertyM`:
+
 ``` diff
 +getSeed :: PropertyM m QCGen
 +getSeed = MkPropertyM (\f -> MkGen (\r n -> unGen (f r) r n))
 ```
+
+We now have all the pieces we need to rewrite `runParallelCommands` to
+use the deterministic scheduler:
 
 ``` diff
  runParallelCommands :: forall state. ParallelModel state
@@ -604,68 +612,45 @@ the underlying monad of a `PropertyM` (QuickCheck's monadic properties):
 ### Changes to the counter example
 
 ``` diff
---- ../stateful-pbt-with-fakes/src/Example/Counter.hs   2024-06-12 13:28:50.091284859 +0200
-+++ src/Example/Counter.hs  2024-07-11 07:00:34.758195571 +0200
-@@ -6,14 +6,14 @@
- 
- module Example.Counter where
- 
--import Control.Concurrent (threadDelay)
--import Control.Monad
-+import Control.Monad.Reader
- import Data.IORef
- import Data.Void
- import System.IO.Unsafe
- import Test.QuickCheck
- import Test.QuickCheck.Monadic
- 
 +import qualified ManagedThread2 as Scheduler
- import Parallel
- import Stateful
- 
-@@ -31,16 +31,18 @@
-   (\n -> if n == 42 then (n, ()) else (n + 1, ()))
- 
- -- start snippet incrRaceCondition
+```
+
+``` diff
 -incrRaceCondition :: IO ()
-+incrRaceCondition :: ReaderT Scheduler.Signal IO ()
- incrRaceCondition = do
+-incrRaceCondition = do
 -  n <- readIORef gLOBAL_COUNTER
 -  threadDelay 100
 -  writeIORef gLOBAL_COUNTER (n + 1)
 -  threadDelay 100
-+  sig <- ask
-+  let mem = Scheduler.fakeMem sig
++incrRaceCondition :: Scheduler.SharedMemory Int -> IO ()
++incrRaceCondition mem = do
 +  n <- liftIO (Scheduler.memReadIORef mem gLOBAL_COUNTER)
-+  liftIO (Scheduler.memWriteIORef mem gLOBAL_COUNTER (n + 1))
- -- end snippet incrRaceCondition
++  Scheduler.memWriteIORef mem gLOBAL_COUNTER (n + 1)
  
 -get :: IO Int
 -get = readIORef gLOBAL_COUNTER
-+get :: ReaderT Scheduler.Signal IO Int
-+get = do
-+  sig <- ask
-+  liftIO (Scheduler.memReadIORef (Scheduler.fakeMem sig) gLOBAL_COUNTER)
- 
- reset :: IO ()
- reset = writeIORef gLOBAL_COUNTER 0
-@@ -81,9 +83,11 @@
-   runFake Incr  (Counter n) = return (Counter (n + 1), Incr_ ())
-   runFake Get m@(Counter n) = return (m, Get_ n)
- 
++get :: Scheduler.SharedMemory Int -> IO Int
++get mem = Scheduler.memReadIORef mem gLOBAL_COUNTER
+```
+
+``` diff
 +  type CommandMonad Counter = ReaderT Scheduler.Signal IO
 +
    -- We also need to explain which part of the counter API each command
    -- corresponds to.
 -  runReal :: Command Counter r -> IO (Response Counter r)
+-  runReal Get  = Get_  <$> get
+-  runReal Incr = Incr_ <$> incrRaceCondition
 +  runReal :: Command Counter r -> ReaderT Scheduler.Signal IO (Response Counter r)
-   runReal Get  = Get_  <$> get
-   -- runReal Incr = Incr_ <$> incr
-   -- runReal Incr = Incr_ <$> incr42Bug
-@@ -94,22 +98,20 @@
-   -- This example has no references.
-   type Reference Counter = Void
- 
++  runReal cmd = do
++    sig <- ask
++    let mem = Scheduler.fakeMem sig
++    case cmd of
++      Get  -> liftIO (Get_  <$> get mem)
++      Incr -> liftIO (Incr_ <$> incrRaceCondition mem)
+```
+
+``` diff
 +  runCommandMonad _ m sig = runReaderT m sig
 +
  prop_counter :: Commands Counter -> Property
@@ -674,8 +659,9 @@ the underlying monad of a `PropertyM` (QuickCheck's monadic properties):
 +  liftIO reset
    runCommands cmds
    assert True
- 
- -- start snippet parallel-counter
+```
+
+``` diff
 -instance ParallelModel Counter where
 -
 -  -- The command monad is IO, so we don't need to do anything here.
@@ -690,7 +676,6 @@ the underlying monad of a `PropertyM` (QuickCheck's monadic properties):
 +  run reset
 +  runParallelCommands cmds
    assert True
- -- end snippet parallel-counter
 ```
 
 ## Conclusion and further work
@@ -700,6 +685,8 @@ the underlying monad of a `PropertyM` (QuickCheck's monadic properties):
 
 - enumarate all interleavings upto some depth, model checking style,
   perhaps using smallcheck? Compare to dejafu library
+
+- rewrite into proper library?
 
 - while this approach works in all languages due to its white-box
   nature, what would it take to have a black-box approach that's

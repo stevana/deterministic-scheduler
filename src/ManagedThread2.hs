@@ -87,11 +87,11 @@ getThreadStatus mtid = atomically go
         Just (Right x)  -> return (Finished x)
 -- end snippet
 
--- start snippet schedule
 -- Wait until all threads are paused, then step one of them and wait until it
 -- either pauses again or finishes. If it pauses again, then repeat the
 -- stepping. If it finishes, remove it from the list of stepped threads and
 -- continue stepping.
+-- start snippet schedule
 schedule :: RandomGen g => [ManagedThreadId a] -> g -> IO ([a], g)
 schedule mtids0 gen0 = do
   res <- timeout 1000000 (waitUntilAllPaused (map _mtidSignal mtids0))
