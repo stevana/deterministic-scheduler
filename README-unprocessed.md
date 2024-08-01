@@ -316,23 +316,29 @@ two, if we start counting from zero and increment by one).
 
 However for more complicated scenarios it gets less clear, consider:
 
-* two concurrent incrs + get
-* timeouts / crashing threads
-* more complicated datastructures than a counter, e.g. key-value store with deletes
+* Two increments and a get operation all happening concurrently, what's the
+  right return value of the get? It depends, it can be 0, 1 or 2;
+* Consider the counter being on a remote server and clients doing the
+  increments and gets via some network. Imagine a client first does an
+  increment and this request times out or the client crashes, then another
+  client does a get operation, what's the return value of the get? It depends,
+  it can be 0 or 1 depending on if the timeout or crash happened before or
+  after the server receieved the increment;
+* The above gets a lot more complicated with more operations involved or more
+  complicated datastructures than a counter, e.g. key-value store with deletes.
 
 Luckily there's a correctness criteria for concurrent programs like these which
-is based on a sequential model:
-
-  Linearizability: a correctness condition for concurrent objects by Herlihy and Wing (1990)
-  https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf
-
-this is what we use in parallel property-based testing (and also what Jepsen's Knossos checker uses)
+is based on a sequential model, [Linearizability: a correctness condition for
+concurrent objects](https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf) by
+Herlihy and Wing (1990), which hides the complexity of non-determinism and
+crashing threads and works on arbitrary datastrucures. This is what we use in
+parallel property-based testing (and is also what Jepsen's Knossos checker
+uses).
 
 The idea in a nutshell: execute commands in parallel, collect a concurrent
 history of when each command started and stopped executing, try to find an
-interleaving of commands which satisfies the sequential model.
-
-* eventual consistency?
+interleaving of commands which satisfies the sequential model. For a more
+detailed explaination see my [previous post](https://stevana.github.io/the_sad_state_of_property-based_testing_libraries.html#parallel-property-based-testing).
 
 ## Integrating the scheduler into the testing
 
@@ -463,11 +469,12 @@ deterministic scheduler:
 
 ### Changes to the counter example
 
-```diff
-+import qualified ManagedThread2 as Scheduler
-```
+We start by replacing our sleeps (`threadDelay`s) with operations from the
+shared memory interface:
 
 ```diff
++import qualified ManagedThread2 as Scheduler
+
 -incrRaceCondition :: IO ()
 -incrRaceCondition = do
 -  n <- readIORef gLOBAL_COUNTER
@@ -485,15 +492,28 @@ deterministic scheduler:
 +get mem = Scheduler.memReadIORef mem gLOBAL_COUNTER
 ```
 
+We need to pass in the `Signal` communication channel when constructing the
+shared memory interface. With our change to `runCommandMonad` we have access to the `sig`nal
+when translating the `CommandMonad` into `IO`, so we can simply pass the
+`sig`nal through using the reader monad (recall that `ReaderT Scheduler.Signal
+IO a` is isomorphic to `Scheduler.Signal -> IO a`).
+
 ```diff
 +  type CommandMonad Counter = ReaderT Scheduler.Signal IO
 +
++  runCommandMonad _ m sig = runReaderT m sig
+```
+
+The construction of the fake shared memory interface happens in the `runReal`
+function, where `ask` retrives the `sig`nal via the reader monad:
+
+```diff
    -- We also need to explain which part of the counter API each command
    -- corresponds to.
 -  runReal :: Command Counter r -> IO (Response Counter r)
 -  runReal Get  = Get_  <$> get
 -  runReal Incr = Incr_ <$> incrRaceCondition
-+  runReal :: Command Counter r -> ReaderT Scheduler.Signal IO (Response Counter r)
++  runReal :: Command Counter r -> CommandMonad Counter (Response Counter r)
 +  runReal cmd = do
 +    sig <- ask
 +    let mem = Scheduler.fakeMem sig
@@ -502,24 +522,14 @@ deterministic scheduler:
 +      Incr -> liftIO (Incr_ <$> incrRaceCondition mem)
 ```
 
-```diff
-+  runCommandMonad _ m sig = runReaderT m sig
-+
- prop_counter :: Commands Counter -> Property
- prop_counter cmds = monadicIO $ do
--  run reset
-+  liftIO reset
-   runCommands cmds
-   assert True
-```
+The final changes are in the in the parallel property itself. Where we can now
+remove the `replicateM_ 10`, which repeats the test 10 times, because the
+thread scheduling is now deterministic and we don't need to repeat the test in
+order to avoid being unlucky with only getting thread interleavings that don't
+reveal the bug.
+
  
 ```diff
--instance ParallelModel Counter where
--
--  -- The command monad is IO, so we don't need to do anything here.
--  runCommandMonad _ = id
-+instance ParallelModel Counter
- 
  prop_parallelCounter :: ParallelCommands Counter -> Property
  prop_parallelCounter cmds = monadicIO $ do
 -  replicateM_ 10 $ do
@@ -530,10 +540,47 @@ deterministic scheduler:
    assert True
 ```
 
+Running the parallel property gives output such as the following:
+
+```
+>>> quickCheck prop_parallelCounter
+Seed: SMGen 14250666030628800360 1954972351745194697
+Seed: SMGen 13912848539649022280 6105520832690741705
+Seed: SMGen 11982463081258021613 5563494797767522969
+Seed: SMGen 3766496530906674898 8913882928510646053
+Seed: SMGen 9878140450988724144 11431408445192688375
+Seed: SMGen 10677049786290338516 2728325560351012375
+Seed: SMGen 8857820011662424543 17283242182436244785
+Seed: SMGen 8857820011662424543 17283242182436244785
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785rink)...
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785rinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785rinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+Seed: SMGen 8857820011662424543 17283242182436244785shrinks)...
+*** Failed! Assertion failed (after 7 tests and 3 shrinks):
+ParallelCommands [Fork [Incr,Incr],Fork [Get]]
+History [Invoke (Pid 0) Incr,Invoke (Pid 1) Incr,Ok (Pid 0) (Incr_ ()),Ok (Pid 1) (Incr_ ()),Invoke (
+Pid 0) Get,Ok (Pid 0) (Get_ 1)]
+```
+
+We can see that different seeds are used up until the test fails, then
+shrinking is done with the same seed.
+
 ## Conclusion and further work
 
 * some seeds don't give the minimal counterexample, shrinking can be improved
   as already pointed out in my previous post
+  + could also be that shrinking causes different interleavings!?
 
 * enumarate all interleavings upto some depth, model checking style, perhaps
   using smallcheck? Compare to dejafu library
@@ -545,6 +592,8 @@ deterministic scheduler:
   + intercept syscalls rr (and hermit?)
   + hypervisor (Antithesis)
   + language support for user schedulers
+
+* other consistency models? eventual consistency?
 
 [^1]: If you haven't heard of
     [fakes](https://martinfowler.com/bliki/TestDouble.html) before, think of
