@@ -332,8 +332,7 @@ is based on a sequential model, [Linearizability: a correctness condition for
 concurrent objects](https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf) by
 Herlihy and Wing (1990), which hides the complexity of non-determinism and
 crashing threads and works on arbitrary datastrucures. This is what we use in
-parallel property-based testing (and is also what Jepsen's Knossos checker
-uses).
+parallel property-based testing.
 
 The idea in a nutshell: execute commands in parallel, collect a concurrent
 history of when each command started and stopped executing, try to find an
@@ -527,7 +526,6 @@ remove the `replicateM_ 10`, which repeats the test 10 times, because the
 thread scheduling is now deterministic and we don't need to repeat the test in
 order to avoid being unlucky with only getting thread interleavings that don't
 reveal the bug.
-
  
 ```diff
  prop_parallelCounter :: ParallelCommands Counter -> Property
@@ -578,22 +576,76 @@ shrinking is done with the same seed.
 
 ## Conclusion and further work
 
-* some seeds don't give the minimal counterexample, shrinking can be improved
-  as already pointed out in my previous post
-  + could also be that shrinking causes different interleavings!?
+I hope I've managed to give a glimpse of how we can deterministically test
+multi-threaded code using a deterministic scheduler, and how this technique can
+be applied to parallel property-based testing.
 
-* enumarate all interleavings upto some depth, model checking style, perhaps
-  using smallcheck? Compare to dejafu library
+While this seems to work, there are several ways in which it can be improved
+upon:
 
-* rewrite into proper library?
+1. Some seeds don't give the minimal counterexample (the one we saw above with
+   two concurrent increments followed by a get). While shrinking can be improved
+   as already pointed out in my previous post, the problem could also be that
+   shrinking changes the interleavings. Let's say we generated three concurrent
+   increments followed by a get, this triggers the race condition if one of
+   those increments overwrite the other's increment. It could be that trying to
+   shrink away any of the increments (to get to the minimal counterexample)
+   fails because by removing any of them will cause the scheduler to unpause the
+   remaining ones in a different order, and thus potentially failing to trigger
+   the race condition.
 
-* while this approach works in all languages due to its white-box nature, what
-  would it take to have a black-box approach that's deterministic?
-  + intercept syscalls rr (and hermit?)
-  + hypervisor (Antithesis)
-  + language support for user schedulers
+   One possible solution to this problem could be to "tombstone" the
+   shrunk commands/threads rather than removing them and then change `runReal`
+   so that tombstoned commands get run using an instance of the shared memory
+   interface in which the pauses happen but not the mutation of the memory. The
+   idea being that by doing so the scheduler will still use the pseudorandom
+   number generator for the shrunk commands and thus the original interleavings
+   will be preserved.
 
-* other consistency models? eventual consistency?
+2. Currently random interleavings are checked, but we could also imagine
+   enumerating all interleavings up to some depth. This would be more inline
+   with what model checkers do. Perhaps
+   [SmallCheck](https://github.com/Bodigrim/smallcheck) could be used for this?
+   It would also be interesting to compare this approach to what the
+   [dejafu](https://github.com/barrucadu/dejafu) library does.
+
+3. While the approach in this post works in all languages due to its white-box
+   nature, it's interesting to consider what would it would take to turn it
+   into a black-box approach? Where with black-box I mean that the programmer
+   doesn't need to change their code to get the deterministic testing.
+
+   Two black-box approaches that I'm aware of are:
+
+   + Intercepting and recording the syscalls that the multi-threaded program
+     does and then somehow using the recorded trace to deterministically
+     reproduce the same execution when the program is rerun. I believe this is
+     what
+     Mozilla's time traveling debugger,
+     [rr](https://www.youtube.com/watch?v=ytNlefY8PIE), and Facebook's
+     [hermit](https://github.com/facebookexperimental/hermit) does);
+   + Antithesis' deterministic
+     [hypervisor](https://antithesis.com/blog/deterministic_hypervisor/).
+
+   Both of these approaches involve a lot of engineering work though, and I'm
+   curious if we can get there cheaper?
+
+   One thing I'm interested in is: what if we had a programming language that's
+   able to switch between the fake and real shared memory interface, depending
+   on if we are testing or not? The multi-threaded code that the user writes in
+   that case doesn't need to be changed to get the deterministic testing, i.e.
+   a black-box approach.
+
+   Implementing a new language and rewriting all your code in that language is
+   also a lot of work as well though. Perhaps existing languages can be
+   incrementally changed to expose scheduler hoos or allow user defined
+   schedulers? Either way, it seems to me that this should be solved at the
+   language-level, rather than OS-level, but maybe that's partly because I
+   don't understand the OS-level solutions well enough. I'd be curious to hear
+   about other opinions or ideas.
+
+4. We've looked at linearisability (to strictly serialisable), but what about
+   other consistency models? For example, eventual consistency?
+
 
 [^1]: If you haven't heard of
     [fakes](https://martinfowler.com/bliki/TestDouble.html) before, think of
