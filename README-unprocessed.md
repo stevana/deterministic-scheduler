@@ -29,7 +29,7 @@ because the jitter of each operation will have less of an impact, and therefore
 helps shrinking.
 
 This isn't a satisfactory solution, of course, and I left a to do item to
-implement a determinstic scheduler, like the authors do in the
+implement a deterministic scheduler, like the authors do in the
 [paper](https://www.cse.chalmers.se/~nicsma/papers/finding-race-conditions.pdf)
 that first introduced parallel property-based testing.
 
@@ -59,20 +59,20 @@ I was therefore happy to see that my post inspired matklad to write a
 where he shows how he'd do it in a multi-threaded shared memory setting.
 
 In this post I'll port matklad's approach from Rust to Haskell and hook it up
-to the parallel property-based testing machinary from my previous post.
+to the parallel property-based testing machinery from my previous post.
 
 Another difference between matklad and the approach in this post is that
-matklad uses an ad-hoc correctness criteria, whereas I follow the parallel
+matklad uses an ad hoc correctness criteria, whereas I follow the parallel
 property-based testing paper and use
 [linearisability](https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf). 
 
-An ad-hoc criteria can be faster than linearisability checking, but depending
+An ad hoc criteria can be faster than linearisability checking, but depending
 on how complicated your system is, it might be harder to find one.
 Linearisability checking on the other hand follows mechanically (for free) from
 a sequential (single-threaded) model/fake. 
 
-If you know what you are doing, then by all means figure out an ad-hoc
-correctness criteria like matklad does. If on the otherhand you haven't tested
+If you know what you are doing, then by all means figure out an ad hoc
+correctness criteria like matklad does. If on the other hand you haven't tested
 much concurrent code before, then I'd recommend starting with the
 linearisability checking approach that we are about to describe[^3].
 
@@ -128,8 +128,8 @@ In the rest of this post we will port matklad's deterministic scheduler from
 Rust to Haskell, hopefully in a way that shows that this can be done in any
 other language with decent multi-threaded programming primitives. Then we'll do
 a short recap of how parallel property-based testing works, and finally we'll
-hook up the deterministic schduler to the parallel property-based testing
-machinary.
+hook up the deterministic scheduler to the parallel property-based testing
+machinery.
 
 ## Deterministic scheduler
 
@@ -143,7 +143,7 @@ pieces to implement the deterministic scheduler itself.
 ### Thread-scheduler communication
 
 The scheduler needs to be able to communicate with the running threads, in
-order to be able to determinstically unpause, or "step", one thread at a time.
+order to be able to deterministically unpause, or "step", one thread at a time.
 
 We'll use Haskell's `TMVar`s for this, but any kind of shared memory will do. 
 
@@ -158,7 +158,7 @@ The `T` in `TMVar`s merely adds
 [STM](https://en.wikipedia.org/wiki/Software_transactional_memory) transactions
 around `MVar`s, we'll see an example of what these are useful for shortly.
 
-We'll call our communcation channel `Signal`:
+We'll call our communication channel `Signal`:
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=Signal .numberLines}
 ```
@@ -218,7 +218,7 @@ Our managed thread can be spawned as follows:
 Noticed that the spawned IO action gets access to the communication channel.
 
 The `Async` thread API exposes a way to check if a thread is still executing,
-threw an exeception or finished yeilding a result. We'll extend this by also
+threw an exception or finished yielding a result. We'll extend this by also
 being able to check if the thread is paused as follows.
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=getThreadStatus .numberLines}
@@ -290,7 +290,7 @@ If we fix the seed to one which makes our test fail:
 ``` {.haskell include=src/ManagedThread2.hs snippet=test2 .numberLines}
 ```
 
-then we get the same outcome everytime:
+Then we get the same outcome every time:
 
 ```
 >>> test2
@@ -323,25 +323,25 @@ However for more complicated scenarios it gets less clear, consider:
   increment and this request times out or the client crashes, then another
   client does a get operation, what's the return value of the get? It depends,
   it can be 0 or 1 depending on if the timeout or crash happened before or
-  after the server receieved the increment;
+  after the server received the increment;
 * The above gets a lot more complicated with more operations involved or more
-  complicated datastructures than a counter, e.g. key-value store with deletes.
+  complicated data structures than a counter, e.g. key-value store with deletes.
 
 Luckily there's a correctness criteria for concurrent programs like these which
 is based on a sequential model, [Linearizability: a correctness condition for
 concurrent objects](https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf) by
 Herlihy and Wing (1990), which hides the complexity of non-determinism and
-crashing threads and works on arbitrary datastrucures. This is what we use in
+crashing threads and works on arbitrary data structures. This is what we use in
 parallel property-based testing.
 
 The idea in a nutshell: execute commands in parallel, collect a concurrent
 history of when each command started and stopped executing, try to find an
 interleaving of commands which satisfies the sequential model. For a more
-detailed explaination see my [previous post](https://stevana.github.io/the_sad_state_of_property-based_testing_libraries.html#parallel-property-based-testing).
+detailed explanation see my [previous post](https://stevana.github.io/the_sad_state_of_property-based_testing_libraries.html#parallel-property-based-testing).
 
 ## Integrating the scheduler into the testing
 
-I don't want to reimplement the parallel property-based testing machinary from
+I don't want to reimplement the parallel property-based testing machinery from
 my previous post here, but merely show that integrating the deterministic
 scheduler isn't too much work.
 
@@ -504,7 +504,7 @@ IO a` is isomorphic to `Scheduler.Signal -> IO a`).
 ```
 
 The construction of the fake shared memory interface happens in the `runReal`
-function, where `ask` retrives the `sig`nal via the reader monad:
+function, where `ask` retrieves the `sig`nal via the reader monad:
 
 ```diff
    -- We also need to explain which part of the counter API each command
@@ -603,7 +603,7 @@ upon:
    will be preserved.
 
 2. Currently random interleavings are checked, but we could also imagine
-   enumerating all interleavings up to some depth. This would be more inline
+   enumerating all interleavings up to some depth. This would be more in line
    with what model checkers do. Perhaps
    [SmallCheck](https://github.com/Bodigrim/smallcheck) could be used for this?
    It would also be interesting to compare this approach to what the
@@ -620,7 +620,7 @@ upon:
      does and then somehow using the recorded trace to deterministically
      reproduce the same execution when the program is rerun. I believe this is
      what
-     Mozilla's time traveling debugger,
+     Mozilla's time travelling debugger,
      [rr](https://www.youtube.com/watch?v=ytNlefY8PIE), and Facebook's
      [hermit](https://github.com/facebookexperimental/hermit) does);
    + Antithesis' deterministic
@@ -637,7 +637,7 @@ upon:
 
    Implementing a new language and rewriting all your code in that language is
    also a lot of work as well though. Perhaps existing languages can be
-   incrementally changed to expose scheduler hoos or allow user defined
+   incrementally changed to expose scheduler hooks or allow user defined
    schedulers? Either way, it seems to me that this should be solved at the
    language-level, rather than OS-level, but maybe that's partly because I
    don't understand the OS-level solutions well enough. I'd be curious to hear
@@ -651,7 +651,7 @@ upon:
     [fakes](https://martinfowler.com/bliki/TestDouble.html) before, think of
     them as a more elaborate test double than a mock. A mock of a component expects
     to be called in some particular way (i.e. exposes only some limited subset of
-    the components API), and typically throw an expeception when called in any
+    the components API), and typically throw an exception when called in any
     other way. While a fake exposes the full API and can be called just like the
     real component, but unlike the real component it takes some shortcuts. For
     example a fake might lose all data when restarted (i.e. keeps all data in
