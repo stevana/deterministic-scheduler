@@ -56,7 +56,7 @@ years
 [ago](https://github.com/advancedtelematic/quickcheck-state-machine-distributed#readme),
 but I didn't know how to do it in a non-message-passing setting. I was
 therefore happy to see that my post inspired matklad to write a
-[post](https://matklad.github.io/2023/07/05/properly-testing-concurrent-data-structures.html)
+[post](https://matklad.github.io/2024/07/05/properly-testing-concurrent-data-structures.html)
 where he shows how he'd do it in a multi-threaded shared memory setting.
 
 In this post I'll port matklad's approach from Rust to Haskell and hook
@@ -784,8 +784,14 @@ improved upon:
     solutions well enough. I'd be curious to hear about other opinions
     or ideas.
 
-4.  We've looked at linearisability (to strictly serialisable), but what
-    about other consistency models? For example, eventual consistency?
+4.  We've looked at linearisability, but what about other consistency
+    models? For example, eventual consistency? See John Hughes et al's
+    [*Mysteries of Dropbox Property-Based Testing of a Distributed
+    Synchronization
+    Service*](https://publications.lib.chalmers.se/records/fulltext/232551/local_232551.pdf) (2016)
+    as well as matklad's
+    [post](https://matklad.github.io/2024/07/05/properly-testing-concurrent-data-structures.html)
+    for hints.
 
 5.  Partial-order reduction: during concurrent execution sometimes we
     can commute two operations without changing the outcome, e.g. the
