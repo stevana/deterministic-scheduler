@@ -18,21 +18,18 @@ uncover race conditions from a sequential fake[^1].
 
 One of the nice things about the approach is that it's a black-box
 testing technique, i.e. it doesn't require the user to change the
-software under test.
-
-One big downside is that because threads will interleave differently
-when we rerun the tests, there by potentially causing different
-outcomes. This in turn creates problems for the shrinking of failing
-test cases[^2].
+software under test. On the other hand because threads will interleave
+differently when we rerun the tests, there by potentially causing
+different outcomes. This in turn creates problems for the shrinking of
+failing test cases[^2].
 
 As a workaround, I suggested that when a race condition is found in the
 unmodified code, one could swap the shared memory module for one that
 introduces sleeps around the operations. This creates less
 non-determinism, because the jitter of each operation will have less of
-an impact, and therefore helps shrinking.
-
-This isn't a satisfactory solution, of course, and I left a to do item
-to implement a deterministic scheduler, like the authors do in the
+an impact, and therefore helps shrinking. This isn't a satisfactory
+solution, of course, and I left a to do item to implement a
+deterministic scheduler, like the authors do in the
 [paper](https://www.cse.chalmers.se/~nicsma/papers/finding-race-conditions.pdf)
 that first introduced parallel property-based testing.
 
@@ -43,11 +40,10 @@ threads each time.
 The deterministic scheduler from the above mentioned paper is called
 PULSE. It was
 [supposedly](http://quviq.com/documentation/pulse/index.html) released
-under the BSD license, however I've not been able to find it.
-
-PULSE is written in Erlang and the paper uses it to test Erlang code. In
-Erlang everything is triggered by message passing, so I think that the
-correct way of thinking about what PULSE does is that it acts as a
+under the BSD license, however I've not been able to find it. PULSE is
+written in Erlang and the paper uses it to test Erlang code. In Erlang
+everything is triggered by message passing, so I think that the correct
+way of thinking about what PULSE does is that it acts as a
 person-in-the-middle proxy. With other words, an Erlang process doesn't
 send a messaged directly to another process, but instead asks the
 scheduler to send it to the process. That way all messages go via the
@@ -58,9 +54,8 @@ I implemented a proxy scheduler like this in Haskell (using
 `distributed-process`, think Haskell trying to be like Erlang) about 6
 years
 [ago](https://github.com/advancedtelematic/quickcheck-state-machine-distributed#readme),
-but I didn't know how to do it in a non-message-passing setting.
-
-I was therefore happy to see that my post inspired matklad to write a
+but I didn't know how to do it in a non-message-passing setting. I was
+therefore happy to see that my post inspired matklad to write a
 [post](https://matklad.github.io/2023/07/05/properly-testing-concurrent-data-structures.html)
 where he shows how he'd do it in a multi-threaded shared memory setting.
 
@@ -72,7 +67,6 @@ Another difference between matklad and the approach in this post is that
 matklad uses an ad hoc correctness criteria, whereas I follow the
 parallel property-based testing paper and use
 [linearisability](https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf).
-
 An ad hoc criteria can be faster than linearisability checking, but
 depending on how complicated your system is, it might be harder to find
 one. Linearisability checking on the other hand follows mechanically
@@ -86,9 +80,7 @@ linearisability checking approach that we are about to describe[^3].
 ## Motivation and overview
 
 In order to explain what we'd like to do, it's helpful to consider an
-example of a race condition.
-
-The text book
+example of a race condition. The text book
 [example](https://en.wikipedia.org/wiki/Race_condition#Example) of a
 race condition is a counter which is incremented by two threads at the
 same time.
@@ -123,9 +115,9 @@ In most programming languages the thread interleaving is
 non-deterministic, and so we get irreproducible failures also sometimes
 known as "Heisenbugs".
 
-What we'd like to do is to be able to start a program with some token
-and if the same token is used then we get the same thread interleaving
-and therefore a reproducible result.
+What we'd like to do is to be able to start a program with some seed and
+if the same seed is used then we get the same thread interleaving and
+therefore a reproducible result.
 
 The idea, due to matklad, is to insert pauses between each shared memory
 operation (the reads and writes), have a scheduler unpause one thread at
@@ -157,17 +149,15 @@ in order to be able to deterministically unpause, or "step", one thread
 at a time.
 
 We'll use Haskell's `TMVar`s for this, but any kind of shared memory
-will do.
-
-Haskell's `MVar`s can be thought of boxes that contain a value, where
-taking something out of a box that is empty blocks and putting something
-into a box that is full blocks as well. Where "blocks" means that the
-run-time will suspend the thread that tries the blocking action and only
-wake it up when the `MVar` changes, i.e. it's an efficient way of
-waiting compared to
+will do. Haskell's `MVar`s can be thought of boxes that contain a value,
+where taking something out of a box that is empty blocks and putting
+something into a box that is full blocks as well. Where "blocks" means
+that the run-time will suspend the thread that tries the blocking action
+and only wake it up when the `MVar` changes, i.e. it's an efficient way
+of waiting compared to
 [busy-waiting](https://en.wikipedia.org/wiki/Busy_waiting) or spinning.
 
-The `T` in `TMVar`s merely adds
+The `T` in `TMVar`s adds
 [STM](https://en.wikipedia.org/wiki/Software_transactional_memory)
 transactions around `MVar`s, we'll see an example of what these are
 useful for shortly.
@@ -486,7 +476,7 @@ post](https://stevana.github.io/the_sad_state_of_property-based_testing_librarie
 
 ## Integrating the scheduler into the testing
 
-I don't want to reimplement the parallel property-based testing
+The point is not to reimplement the parallel property-based testing
 machinery from my previous post here, but merely show that integrating
 the deterministic scheduler isn't too much work.
 
@@ -796,6 +786,25 @@ improved upon:
 
 4.  We've looked at linearisability (to strictly serialisable), but what
     about other consistency models? For example, eventual consistency?
+
+5.  Partial-order reduction: during concurrent execution sometimes we
+    can commute two operations without changing the outcome, e.g. the
+    interleaving of two increments doesn't matter, they all end up the
+    same state. We can exploit this fact to check less histories;
+
+6.  We looked at shared memory, but there are other ways of getting data
+    races, e.g. via concurrent file system access, mmaped memory, etc.
+    All these other ways of concurrently mutating some state would
+    require interfaces with fake implementations that insert pauses
+    around the actual mutation. It would be interesting to take an
+    example of a concurrent (and persisted?) data structure, e.g. the
+    LMAX Disruptor or Aeron's [log
+    buffers](https://github.com/real-logic/aeron/wiki/Data-Structures),
+    and implement and test it in the same way we tested the counter.
+
+If you've feedback, comments or are interested in working on any of the
+above, feel free to get in
+[touch](https://stevana.github.io/about.html).
 
 [^1]: If you haven't heard of
     [fakes](https://martinfowler.com/bliki/TestDouble.html) before,
