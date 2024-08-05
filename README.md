@@ -294,7 +294,6 @@ schedule mtids0 gen0 = do
   case res of
     Nothing -> error "schedule: all threads didn't pause within a second"
     Just () -> do
-      -- putStrLn "all paused"
       go mtids0 gen0 []
   where
     go :: RandomGen g => [ManagedThreadId a] -> g -> [a] -> IO ([a], g)
@@ -302,12 +301,10 @@ schedule mtids0 gen0 = do
     go mtids gen acc = do
       let (ix, gen') = randomR (0, length mtids - 1) gen
           mtid = mtids !! ix
-      -- putStrLn ("schedule, picked: " ++ _mtidName mtid)
       unpause (_mtidSignal mtid)
       status <- getThreadStatus mtid
       case status of
         Finished x -> do
-          -- putStrLn ("schedule, finished: " ++ _mtidName mtid)
           go (mtids \\ [mtid]) gen' (x : acc)
         Paused     -> go mtids gen' acc
         Threw err  -> error ("schedule: " ++ show err)
@@ -344,15 +341,13 @@ fakeMem signal =
   SharedMemory
     { memReadIORef = \ref -> do
         pause signal
-        -- putStrLn "reading ref"
         x <- readIORef ref
-        -- pause signal
+        pause signal
         return x
     , memWriteIORef = \ref x -> do
         pause signal
-        -- putStrLn "writing ref"
         writeIORef ref x
-        -- pause signal
+        pause signal
     }
 ```
 
