@@ -736,6 +736,14 @@ improved upon:
     shrunk commands and thus the original interleavings will be
     preserved.
 
+    Another possible solution, due to Daniel Gustafsson, is to save more
+    info than merely the seed. In particular the scheduler could
+    generate the first interleaving using a seed, but then save the
+    interleaving (the order in which the threads were unpaused) and
+    consequent reruns can reuse the interleaving (or shrunk subsets of
+    it) instead of the seed and thereby preserve the original
+    interleaving.
+
 2.  Currently random interleavings are checked, but we could also
     imagine enumerating all interleavings up to some depth. This would
     be more in line with what model checkers do. Perhaps
@@ -806,6 +814,11 @@ improved upon:
 If you've feedback, comments or are interested in working on any of the
 above, feel free to get in
 [touch](https://stevana.github.io/about.html).
+
+## Acknowledgments
+
+Thanks to Daniel Gustafsson for discussing tombstone solution to the
+problem where shrinking can cause different thread interleavings.
 
 [^1]: If you haven't heard of
     [fakes](https://martinfowler.com/bliki/TestDouble.html) before,
