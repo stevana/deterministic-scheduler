@@ -1,7 +1,5 @@
 # Parallel property-based testing with a deterministic thread scheduler
 
-*Work in progress, please don't share, but do feel free to get involved!*
-
 This post is about how to write tests that can catch race conditions in a
 reproducible way. The approach is programming language agnostic, and should
 work in most languages that have a decent multi-threaded story. It's a
@@ -49,7 +47,7 @@ I implemented a proxy scheduler like this in Haskell (using
 `distributed-process`, think Haskell trying to be like Erlang) about 6 years
 [ago](https://github.com/advancedtelematic/quickcheck-state-machine-distributed#readme),
 but I didn't know how to do it in a non-message-passing setting. I was
-therefore happy to see that my post inspired matklad to write a
+therefore happy to see that my previous post inspired matklad to write a
 [post](https://matklad.github.io/2024/07/05/properly-testing-concurrent-data-structures.html)
 where he shows how he'd do it in a multi-threaded shared memory setting.
 
@@ -111,11 +109,11 @@ What we'd like to do is to be able to start a program with some seed and if
 the same seed is used then we get the same thread interleaving and therefore a
 reproducible result.
 
-The idea, due to matklad, is to insert pauses between each shared memory
-operation (the reads and writes), have a scheduler unpause one thread at the
-time. The scheduler is parametrised by a seed which is used together with a
-pseudorandom number generator which allows it to deterministically choose which
-thread to unpause.
+The idea, due to matklad, is to insert pauses around each shared memory
+operation (the reads and writes) and have a scheduler unpause one thread at the
+time. The scheduler is parametrised by a seed, which is fed into a pseudorandom
+number generator which in turn lets the scheduler deterministically choose
+which thread to unpause.
 
 In the rest of this post we will port matklad's deterministic scheduler from
 Rust to Haskell, hopefully in a way that shows that this can be done in any
@@ -238,15 +236,16 @@ We can now also implement a useful higher-level combinator:
 To show that our scheduler is indeed deterministic, let's implement the race
 condition between two increments from the introduction.
 
-First let's introduce an interface for shared memory.
+First let's introduce an interface for shared memory. The idea is that we will
+use two different instances of this interface: a "real" one which just does
+what we'd expect from shared memory, and a "fake" one which pauses around the
+real operations. 
 
 ``` {.haskell include=src/ManagedThread2.hs snippet=SharedMemory .numberLines}
 ```
 
-The idea is that we will use two different instances of this interface: a
-"real" one which just does what we'd expect from shared memory, and a "fake"
-one which pauses around the real operations. The real one will be used when we
-deploy the actual software and the fake one while we do our testing.
+The real one will be used when we deploy the actual software and the fake one
+while we do our testing.
 
 We can now implement our counter example against the shared memory interface:
 
@@ -461,8 +460,9 @@ deterministic scheduler:
 
 ### Changes to the counter example
 
-We start by replacing our sleeps (`threadDelay`s) with operations from the
-shared memory interface:
+We start by replacing our sleeps (`threadDelay`s) and direct manipulation of
+shared memory (`{read,write}IORef`) with operations from the shared memory
+interface:
 
 ```diff
 +import qualified ManagedThread2 as Scheduler
